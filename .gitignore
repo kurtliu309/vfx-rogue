@@ -1,0 +1,5 @@
+# 只公开游戏本身；设计笔记和接手文档留在本地
+docs/
+AGENTS.md
+HANDOFF.md
+hub.json
