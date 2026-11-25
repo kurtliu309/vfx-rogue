@@ -1,2202 +1,1234 @@
-/* 节点肉鸽 — 纯逻辑引擎（浏览器全局 VFXEngine / Node CommonJS） */
+/* Node Rogue v2 — pure logic engine (browser global VFXEngine / Node CommonJS).
+ * No DOM here. Story text lives in story.js (VFXStory).
+ */
 (function (global) {
   'use strict';
 
-  /* ================================================================
-   * 1. 顶层可调数值
-   * ================================================================ */
-  const CONFIG = {
-    startingMoney: 4000,
-    startingDeck: [
-      'box', 'box', 'sculpt',
-      'pyro', 'pyro', 'flip',
-      'keylight', 'render',
-      'grade', 'roto', 'merge', 'keygreen'
-    ],
-    months: 6,
-    levelsPerMonth: 3,
-    rent: 1000,
-    caffeineExtraRent: 200,
-    handSize: 8,
-    baseCooks: 3,
-    clientChangeCooks: 2,
-    mentorExtraCook: 1,
-    targetBase: 50,
-    // 规格给出的参考曲线约为 1.32；这里采用 1.26，以保证 6 个月在
-    // 10–14h 预算下存在通关打法（见 README「数值调节」）。
-    targetGrowth: 1.26,
-    bossTargetMultiplier: 1.3,
-    budgetMin: 10,
-    budgetMax: 14,
-    renderFarmBudgetPenalty: 3,
-    caffeineBudgetBonus: 3,
-    rewards: { side: 600, mid: 900, boss: 1500 },
-    portfolioBonus: 100,
-    shop: {
-      nodeMin: 150,
-      nodeMax: 300,
-      relicPrice: 400,
-      deletePrice: 100,
-      upgradePrice: 200,
-      nodeCount: 3
-    },
-    upgradeMultiplier: 1.25,
-    substepHours: 1,
-    fxBondExplosionReduction: 0.10,
-    modelBondBonus: 10,
-    lightingBondAura: 1.5,
-    lightingLinkBondAura: 1.35,
-    mergeDeptBonus: 0.25,
-    outsourceTargetMultiplier: 0.8,
-    outsourceRewardMultiplier: 0.5,
-    usdRelicFreeMismatchesPerLevel: 1
-  };
+  const IS_NODE = typeof module !== 'undefined' && module.exports;
+  const STORY = IS_NODE ? require('./story.js') : global.VFXStory;
+  const UI_TEXT = IS_NODE ? require('./i18n.js') : global.VFXI18N;
 
   /* ================================================================
-   * 2. 文字表 / i18n
+   * 0. helpers: i18n + rng
    * ================================================================ */
-  const DEFAULT_LANG = 'en';
+  const loc = (en, zh) => ({ en, zh });
   const LANGS = ['en', 'zh'];
-
-  /* 界面通用文字。两张表的 key 必须完全一致（test.js 会检查）。
-     数据表里的名称 / 说明用 loc(en, zh) 直接带双语。 */
-  const I18N = {
-    en: {
-      'app.title': 'Node Rogue',
-      'app.brand': 'NODE ROGUE',
-      'app.brandSub': 'NODE ROGUE · VFX SURVIVAL',
-
-      'top.monthLevel': 'Month {month} · Level {slot}/3',
-      'top.monthLabel': 'MONTH / LEVEL',
-      'top.money': 'CASH',
-      'top.rent': 'NEXT RENT',
-      'top.rentShort': 'RENT',
-      'top.relicStripTip': 'Relics you own. Hover to see their effects.',
-      'top.noRelicsTip': 'No relics yet. Clear a mid-size studio job to pick one of three.',
-      'top.help': '? Rules',
-      'top.helpTitle': 'How to play',
-      'top.deck': 'Deck {n}',
-      'top.deckTitle': 'View deck',
-      'top.langTip': 'Switch language',
-      'top.langToggle': 'EN / 中文',
-      'top.menu': 'Menu',
-      'top.menuTitle': 'Menu',
-      'top.monthShort': 'M{month} · {slot}/3',
-
-      'menu.kicker': 'MENU',
-      'menu.title': 'Menu',
-      'menu.rules': 'Rules & how to play',
-      'menu.deck': 'View deck',
-      'menu.relics': 'Relics',
-
-      'relics.title': 'Relics',
-      'relics.count': 'Owned: {n}',
-      'relics.empty': 'No relics yet. Clear a mid-size studio job to pick one of three.',
-
-      'tier.boss': 'Dream Studio · BOSS',
-      'tier.mid': 'Mid-size Studio',
-      'tier.side': 'Freelance Gig',
-      'tierShort.boss': 'BOSS',
-      'tierShort.mid': 'MID',
-      'tierShort.side': 'GIG',
-
-      'company.label': 'CLIENT / BRIEF',
-      'company.requiresOutput': 'Job requires output',
-      'company.targetScore': 'Target score',
-      'company.targetShort': 'Target',
-      'company.cookBudget': 'Cook budget',
-      'company.budgetShort': 'Budget',
-      'company.cashReward': 'Cash reward',
-      'company.currentEstimate': 'Current estimate',
-      'company.specialRule': 'Special rule · {name}',
-      'company.footerLevel': 'Level {index}/18 · {tier}',
-      'company.expandTip': 'Tap to expand the brief',
-      'company.collapseTip': 'Tap to collapse the brief',
-
-      'board.title': 'Node Grid',
-      'board.subtitle': 'COOKING GRID',
-      'board.flowHint': 'Data flow',
-      'board.flowTarget': 'rightmost node → output',
-      'board.emptyCellTip': 'Empty cell. Pick a node from your hand first.',
-      'board.placeTip': 'Place the selected node.',
-      'output.label': 'OUT {n}',
-      'output.waiting': 'Not connected',
-      'output.tipHeader': 'Output slot for row {row}.',
-      'output.tipRule': 'Fed by the rightmost node in this row; the type must be {port}.',
-      'output.tipCurrent': 'Current: {port} · value {value}',
-      'output.tipMismatch': 'Type mismatch — this row scores 0.',
-      'output.tipGeneralist': 'Fewer than 3 departments — Generalist Wanted halves this row.',
-      'output.tipEmpty': 'No node in this row.',
-
-      'hand.title': 'HAND',
-      'hand.selectedHint': 'Selected — click an empty grid cell to place',
-      'hand.hint': 'Click to select · click a placed node to take it back · FX nodes adjust substep',
-      'hand.empty': 'Hand empty',
-      'hand.multiOut': 'Multi',
-      'hand.baseHours': 'Base time: {hours}',
-      'hand.mobileHint': 'Tap to select · long-press / ⓘ for details',
-      'hand.infoTip': 'View card details',
-      'card.takeBack': 'Take back to hand',
-      'card.detailsTitle': 'Card details',
-      'card.substepLabel': 'Substep',
-
-      'node.tipTitle': '{name} · {dept}',
-      'node.inputOutput': 'Input: {input}  →  Output: {output}',
-      'node.hours': 'Time: {hours}',
-      'node.substepSuffix': ' · substep ',
-      'node.noOutput': 'None',
-      'node.passThroughTip': 'Specialist Only: this node passes through at ×1 / 0h.',
-      'node.estimate': 'Est. output: {value}',
-      'node.notSupplied': 'Not connected (no output)',
-      'node.explosionChance': 'Explosion chance: {chance}%',
-      'node.auraBonus': 'Column aura: ×{mult}',
-      'node.upgraded': 'Upgraded: value ×{mult}',
-      'node.vexed': 'VEX marked: value ×2',
-      'node.clickToRemove': 'Click the node to take it back into your hand.',
-      'node.inputSource': 'None (source)',
-      'node.inputMerge': 'Left / top-left / bottom-left',
-      'node.outputByInput': 'Decided by input',
-      'node.clickToSelect': 'Click to select, then click an empty grid cell to place.',
-      'node.directPass': 'Pass',
-      'node.directPassTip': 'Specialist Only: pass-through ×1 / 0h, effects off',
-      'node.upgradedBadgeTip': 'Upgraded node: value ×{mult}',
-      'node.vexBadgeTip': 'VEX mark: value ×2 this level',
-      'node.vexButtonTip': 'VEX: mark this node at ×2 for this level, once per level',
-      'node.riskBadgeTip': 'Rolled on Cook: {chance}% chance to explode.',
-      'node.sourceLabel': 'SRC',
-      'node.sumLabel': 'SUM',
-      'node.rbdLabel': '×MODEL',
-
-      'short.box': 'BOX',
-      'short.sculpt': 'SCL',
-      'short.kitbash': 'KIT',
-      'short.scan': 'SCN',
-      'short.pyro': 'PYR',
-      'short.flip': 'FLP',
-      'short.vellum': 'VLM',
-      'short.rbd': 'RBD',
-      'short.keylight': 'KEY',
-      'short.render': 'RND',
-      'short.hdri': 'HDRI',
-      'short.lightlink': 'LLK',
-      'short.grade': 'GRD',
-      'short.roto': 'ROT',
-      'short.keygreen': 'KGR',
-      'short.despill': 'DSP',
-      'short.merge': 'MRG',
-
-      'detail.title': 'Node details',
-      'mobile.est': 'EST',
-      'mobile.time': 'TIME',
-      'mobile.risk': 'RISK',
-      'mobile.cooksLeft': '{n} left',
-      'ui.close': 'Close',
-
-      'bond.title': 'Dept Bonds',
-      'bond.effectiveNodes': '{n} active nodes',
-      'bond.modelName': 'Model ≥ 3',
-      'bond.modelEffect': 'All Model base values +{n}',
-      'bond.fxName': 'FX ≥ 3',
-      'bond.fxEffect': 'All explosion chance -{n}%',
-      'bond.lightingName': 'Lighting ≥ 3',
-      'bond.lightingEffect': 'Aura ×1.3→×1.5, Light Linking ×1.2→×1.35',
-      'bond.compName': 'Comp ≥ 3',
-      'bond.compEffect': 'All Comp nodes take 0h',
-      'bond.tapHint': 'Tap a badge for details',
-      'bond.countLine': '{n} / 3 effective {dept} nodes',
-
-      'score.title': 'Level Estimate',
-      'score.kicker': 'SCORE',
-      'score.target': '/ Target <b>{n}</b>',
-      'score.empty': 'Empty',
-      'score.halved': ' · halved',
-      'score.specialistNote': 'Specialist Only: lead department is <b>{dept}</b>; other departments pass through at ×1 / 0h.',
-      'score.usdNote': 'USD Pipeline: the first port mismatch this level was allowed.',
-      'score.generalistNote': 'A scoring chain has fewer than 3 departments; that row is halved.',
-
-      'cook.title': 'Cook',
-      'cook.button': 'COOK',
-      'cook.kickerOver': 'OVER BUDGET',
-      'cook.kickerReady': 'READY',
-      'cook.budgetLabel': 'Estimated time / budget',
-      'cook.ready': 'Ready to cook',
-      'cook.chances': 'Cook chances',
-      'cook.chancesTip': 'Up to {n} Cooks this level',
-      'cook.maxRisk': 'Max explosion risk: <b>{chance}%</b>',
-      'cook.fxBondActive': ' · FX bond active',
-      'cook.subOk': 'Hit the target to deliver; if you miss, adjust and Cook again.',
-      'cook.viewDeck': 'View Deck',
-      'cook.howTo': 'How to Play',
-      'cook.boom': 'BOOM',
-      'cook.rescue': 'Rescue +{value}',
-
-      'err.cooking': 'Cooking…',
-      'err.levelOver': 'This level is already over',
-      'err.noCooksLeft': 'No Cooks left',
-      'err.overBudgetNoCook': 'Over budget — cannot Cook',
-      'err.overBudget': 'Over budget',
-      'err.cannotPlace': "You can't place a node right now",
-      'err.cannotOperate': "You can't do that right now",
-      'err.badCell': "That cell doesn't exist",
-      'err.cellOccupied': 'That cell is occupied',
-      'err.cardNotInHand': "That node isn't in your hand",
-      'err.noNodeHere': "There's no node here",
-      'err.cardNotFound': 'Node not found',
-      'err.noSubstep': 'Only FX nodes have substeps',
-      'err.noVexRelic': "You don't have the VEX relic",
-      'err.vexNotNow': "You can't use VEX right now",
-      'err.vexUsed': 'Already used this level',
-      'err.placeFirst': 'Place the node on the grid first',
-      'err.cannotContinue': "You can't continue right now",
-      'err.notRelicPhase': 'Not in the relic pick phase',
-      'err.relicNotOffered': "That relic isn't one of the choices",
-      'err.relicOwned': 'You already own this relic',
-      'err.notInShop': 'Not in the shop',
-      'err.alreadyBought': 'Already bought',
-      'err.noMoney': 'Not enough cash',
-      'err.noRelicToBuy': 'No relic available to buy',
-      'err.alreadyOwn': 'Already owned',
-      'err.deleteUsed': 'Delete service already used this shop',
-      'err.keepOneCard': 'Deck must keep at least 1 card',
-      'err.cardNotFoundShort': 'Card not found',
-      'err.upgradeUsed': 'Upgrade service already used this shop',
-      'err.alreadyUpgraded': 'This card is already upgraded',
-
-      'toast.pickHandFirst': 'Pick a node from your hand first.',
-      'toast.vexMarked': 'VEX marked: this node outputs ×2 this level.',
-      'toast.boughtNode': 'Bought {name}.',
-      'toast.gotRelic': 'Relic acquired: {name}.',
-      'toast.confirmDelete': 'Delete {name}? This cannot be undone and costs {price}.',
-      'toast.deleted': 'Deleted {name}.',
-      'toast.upgraded': 'Upgrade complete: value ×{mult}.',
-      'toast.rentDead': "Can't pay rent — game over.",
-      'toast.relicPicked': 'Got relic: {name}.',
-
-      'result.kickerClear': 'COOK · CLEAR',
-      'result.kickerResult': 'COOK RESULT',
-      'result.title': 'Cook Result',
-      'result.stampClear': 'LEVEL CLEAR',
-      'result.stampFailed': 'LEVEL FAILED',
-      'result.stampCook': 'COOK RESULT',
-      'result.titleClear': 'Delivered',
-      'result.titleFailed': 'Level Failed',
-      'result.titleClose': 'So Close',
-      'result.subSuccess': 'Target {target}, actual {score}. The client is happy.',
-      'result.subFailed': 'Three Cooks used and the job failed. No reward — pack up and head to the next studio.',
-      'result.subClose': 'You need {diff} more points. Adjust your nodes and Cook again.',
-      'result.btnOffer': 'Claim the dream offer',
-      'result.btnEnding': 'Face the ending',
-      'result.btnContinue': 'Settle up & continue',
-      'result.btnAdjust': 'Back to adjust',
-      'result.statHours': 'Time / budget',
-      'result.statCooks': 'Cooks left',
-      'result.statDiff': 'Point gap',
-      'result.row': 'Row {row} · {type}',
-      'result.explosion': 'Row {row} {name} exploded ({chance}% · pre-explosion {value})',
-      'result.explosionJoin': '; ',
-      'result.explosionCache': '. Cache Habit kept 50% of the output.',
-      'result.explosionZero': '. The node now outputs zero.',
-      'result.reward': 'Level reward <b>+{money}</b>',
-      'result.portfolio': ' Portfolio Site <b>+{money}</b>',
-      'result.midRelic': '<br>Mid-size studio cleared: <b>pick 1 of 3 relics</b> next.',
-
-      'deck.kicker': 'DECK',
-      'deck.title': 'Deck · {n} cards',
-      'misc.cook': 'Cook',
-      'deck.sub': 'Draw {n} random cards each level. Upgrades are permanent.',
-      'deck.ownerHand': 'Hand',
-      'deck.ownerField': 'Field',
-
-      'help.kicker': 'HOW TO PLAY',
-      'help.title': 'How to Play',
-      'help.sub': 'Block prototype — no art, no server required.',
-      'help.b1.title': '1. Place nodes',
-      'help.b1.p1': 'Pick a hand card to select it, then tap / click an empty grid cell to place. Tap / click a placed node to open its details and take it back. Use <b>− / +</b> on FX nodes to set substep.',
-      'help.b1.p2': 'Data flows left to right. Empty cells act as wires: each node links to the nearest node on its left, and the <b>rightmost</b> node in a row feeds the output slot; it scores only if its type matches the client requirement.',
-      'help.b2.title': '2. Port matching',
-      'help.b2.p1': 'Each node accepts specific input types; if the left neighbor does not match, the wire breaks (red dashed). Model source nodes need no input.',
-      'help.b2.p2': 'Ports: <span style="color:#9aa4b3">■ geo</span> · <span style="color:#ff9349">▲ sim</span> · <span style="color:#4d9dff">● render</span> · <span style="color:#ffd166">◆ final</span>.',
-      'help.b3.title': '3. Cook',
-      'help.b3.p1': 'Hit COOK and values flow along the wires. FX nodes may explode, zeroing their output and cutting downstream flow. You cannot Cook over budget; each level gives 3 tries by default.',
-      'help.b3.p2': 'Running out of Cooks without hitting the target fails the level. No reward, but the campaign continues.',
-      'help.b4.title': '4. Six months to survive',
-      'help.b4.p1': 'You start with $4000; rent $1000 is charged at the start of each month. Each month has three jobs: gig / mid-size studio / dream-studio boss. Savings below 0 ends the run.',
-      'help.b4.p2': 'Clearing a mid-size job lets you pick 1 of 3 relics; after each job you can shop for nodes, relics, card deletion or upgrades.',
-      'help.b5.title': 'Dept mechanics',
-      'help.b5.html': '<ul><li><b>Model</b>: sources; stack vertically. Kitbash feeds on other Model nodes in its column.</li><li><b>FX</b>: substep gamble — multiplier, time and explosion risk all rise together.</li><li><b>Lighting</b>: auras boost non-Lighting nodes directly above/below in the column.</li><li><b>Comp</b>: longer chains hit harder; Roto recovers 60% of an upstream explosion.</li></ul>',
-      'help.b6.title': 'Bonds & utility',
-      'help.b6.p1': 'Three effective nodes of the same department on the grid trigger that department bond (see the right panel).',
-      'help.b6.p2': '<b>Merge</b> takes left / top-left / bottom-left inputs, sums them, multiplies by the number of distinct departments in the source chains, and outputs the highest-ranked type.',
-
-      'relic.kicker': 'RELIC REWARD',
-      'relic.title': 'Mid-size Studio · Pick 1 of 3 Relics',
-      'relic.sub': '{company} loves your work. Take one relic into the next level.',
-      'relic.foot': 'Relics never duplicate and last forever.',
-
-      'shop.kicker': 'POST-JOB SHOP',
-      'shop.title': '{company} · Asset Shop',
-      'shop.summarySuccess': 'Level clear +{money}',
-      'shop.summaryFail': 'Level failed · no reward',
-      'shop.summaryScore': '{score} / {target} pts',
-      'shop.summaryDefault': 'Level results',
-      'shop.wallet': 'WALLET',
-      'shop.cash': 'cash available',
-      'shop.note': 'Delete / upgrade once each<br>Buy as many nodes as you like',
-      'shop.nodesTitle': 'NODE OFFERS',
-      'shop.relicTitle': 'RELIC',
-      'shop.servicesTitle': 'SERVICES',
-      'shop.deleteService': 'Delete card',
-      'shop.upgradeService': 'Upgrade node',
-      'shop.used': 'used',
-      'shop.unused': 'unused',
-      'shop.serviceNote': 'Pick delete / upgrade targets from the deck list on the right.',
-      'shop.deckTitle': 'YOUR DECK ({n})',
-      'shop.legend1': 'Delete / upgrade limited to once per shop',
-      'shop.legend2': 'Grey button = unavailable',
-      'shop.leave': 'Leave Shop →',
-      'shop.buy': 'Buy',
-      'shop.boughtNode': 'Bought',
-      'shop.boughtRelic': 'Owned',
-      'shop.noRelic': 'No relics left to buy here.',
-      'shop.deleteBtn': 'Del {price}',
-      'shop.upgradeBtn': 'Up {price}',
-      'shop.deleteTitle': 'Delete card {price}',
-      'shop.upgradeTitle': 'Upgrade {price}',
-      'shop.next': 'Next: Month {month} · Level {slot}/3 · {tier}',
-      'shop.nextRent': ' · rent {money} will be charged',
-      'shop.lastCompany': 'This is the last studio.',
-      'shop.offerTip': '{name}\n{desc}\nPrice {money}',
-
-      'end.deadTitle': 'Starving Artist',
-      'end.deadCopy': 'Your savings are gone. Rent and takeout wait for no one.',
-      'end.broke': 'Savings below zero. Game over.',
-      'end.victoryTitle': 'DREAM OFFER',
-      'end.victoryCopy': 'The Month-6 boss said yes. You finally pitched your reel into {company}; tomorrow you start delivering real shots.',
-      'end.noOfferTitle': 'Six Months Later',
-      'end.noOfferCopy': 'You survived six months but never landed the dream-studio offer. The work remains, and the next hiring round will come.',
-      'end.letterTitle': 'Offer Letter',
-      'end.letterGreeting': 'To our next VFX artist:',
-      'end.letterBody': 'We saw your node graphs, your caches, and the impossible things you made on budget. {company} is officially inviting you to join us.',
-      'end.letterSalary': 'Salary negotiable. Rent shared.',
-      'end.letterSig': '— {company} · Recruiting',
-      'end.finalMoney': 'Final balance',
-      'end.monthReached': 'Month reached',
-      'end.monthValue': 'Month {n}',
-      'end.levelsCleared': 'Levels cleared',
-      'end.restart': 'Start the six months again',
-      'end.dreamCompany': 'Dream Studio',
-      'end.rentStart': "Couldn't pay rent at the start — you starve on the street.",
-      'end.rentMonth': "Couldn't pay rent for the new month. Game over."
-    },
-    zh: {
-      'app.title': '节点肉鸽',
-      'app.brand': 'NODE ROGUE',
-      'app.brandSub': '节点肉鸽 · VFX 生存战',
-
-      'top.monthLevel': '第 {month} 月 · {slot}/3 关',
-      'top.monthLabel': '月份 / 关卡',
-      'top.money': '存款',
-      'top.rent': '下月房租',
-      'top.rentShort': '房租',
-      'top.relicStripTip': '已获得的遗物。悬停查看效果。',
-      'top.noRelicsTip': '还没有遗物。中型工作室达标后可以三选一。',
-      'top.help': '? 规则',
-      'top.helpTitle': '玩法说明',
-      'top.deck': '牌组 {n}',
-      'top.deckTitle': '查看牌组',
-      'top.langTip': '切换语言',
-      'top.langToggle': 'EN / 中文',
-      'top.menu': '菜单',
-      'top.menuTitle': '菜单',
-      'top.monthShort': '{month}月 · {slot}/3',
-
-      'menu.kicker': '菜单',
-      'menu.title': '菜单',
-      'menu.rules': '规则与玩法',
-      'menu.deck': '查看牌组',
-      'menu.relics': '遗物列表',
-
-      'relics.title': '遗物',
-      'relics.count': '已拥有：{n}',
-      'relics.empty': '还没有遗物。中型工作室达标后可以三选一。',
-
-      'tier.boss': 'BOSS · 梦想公司',
-      'tier.mid': '中型工作室',
-      'tier.side': '零活',
-      'tierShort.boss': 'BOSS',
-      'tierShort.mid': '中型',
-      'tierShort.side': '零活',
-
-      'company.label': '客户 / 公司卡',
-      'company.requiresOutput': '本关要求输出',
-      'company.targetScore': '目标分',
-      'company.targetShort': '目标分',
-      'company.cookBudget': 'Cook 预算',
-      'company.budgetShort': '预算',
-      'company.cashReward': '现金奖励',
-      'company.currentEstimate': '当前预估',
-      'company.specialRule': '特殊规则 · {name}',
-      'company.footerLevel': '第 {index}/18 关 · {tier}',
-      'company.expandTip': '点按展开公司卡',
-      'company.collapseTip': '点按收起公司卡',
-
-      'board.title': '节点网格',
-      'board.subtitle': 'COOKING GRID',
-      'board.flowHint': '数据流',
-      'board.flowTarget': '最右节点 → 输出口',
-      'board.emptyCellTip': '空格。先从手牌选一个节点。',
-      'board.placeTip': '放置选中的节点。',
-      'output.label': '输出 {n}',
-      'output.waiting': '等待连接',
-      'output.tipHeader': '第 {row} 行的输出口。',
-      'output.tipRule': '只接收本行最右边节点的输出；类型必须是 {port}。',
-      'output.tipCurrent': '当前：{port} · 数值 {value}',
-      'output.tipMismatch': '类型不符，本行计 0 分。',
-      'output.tipGeneralist': '部门数 < 3，「要全面的人」使本行减半。',
-      'output.tipEmpty': '本行没有节点。',
-
-      'hand.title': '手牌 · HAND',
-      'hand.selectedHint': '已选中一张牌 → 点击网格空格放置',
-      'hand.hint': '点牌选中 · 点场上节点收回 · FX 可调 substep',
-      'hand.empty': '手牌为空',
-      'hand.multiOut': '多路',
-      'hand.baseHours': '基础耗时：{hours}',
-      'hand.mobileHint': '点按选中 · 长按 / ⓘ 看说明',
-      'hand.infoTip': '查看卡片说明',
-      'card.takeBack': '拿回手牌',
-      'card.detailsTitle': '卡片详情',
-      'card.substepLabel': 'Substep',
-
-      'node.tipTitle': '{name} · {dept}',
-      'node.inputOutput': '输入：{input}  →  输出：{output}',
-      'node.hours': '耗时：{hours}',
-      'node.substepSuffix': ' · substep ',
-      'node.noOutput': '无',
-      'node.passThroughTip': '只招专才：该节点按直通 ×1 / 0h 处理。',
-      'node.estimate': '预估输出：{value}',
-      'node.notSupplied': '未接通（无输出）',
-      'node.explosionChance': '爆炸概率：{chance}%',
-      'node.auraBonus': '本列光环加成：×{mult}',
-      'node.upgraded': '已升级：数值 ×{mult}',
-      'node.vexed': 'VEX 标记：数值 ×2',
-      'node.clickToRemove': '点击节点可收回手牌。',
-      'node.inputSource': '无（源）',
-      'node.inputMerge': '左 / 左上 / 左下',
-      'node.outputByInput': '由输入决定',
-      'node.clickToSelect': '点击选中，再点网格空格放置。',
-      'node.directPass': '直通',
-      'node.directPassTip': '只招专才：直通 ×1 / 0h，特效无效',
-      'node.upgradedBadgeTip': '升级节点：数值 ×{mult}',
-      'node.vexBadgeTip': 'VEX 标记：本关数值 ×2',
-      'node.vexButtonTip': 'VEX：本关把此节点标记为 ×2，每关一次',
-      'node.riskBadgeTip': 'Cook 时掷骰，有 {chance}% 概率爆炸。',
-      'node.sourceLabel': '源',
-      'node.sumLabel': 'SUM',
-      'node.rbdLabel': '×模型',
-
-      'short.box': '盒',
-      'short.sculpt': '雕',
-      'short.kitbash': '拼',
-      'short.scan': '扫',
-      'short.pyro': '火',
-      'short.flip': '流',
-      'short.vellum': '布',
-      'short.rbd': '碎',
-      'short.keylight': '灯',
-      'short.render': '渲',
-      'short.hdri': 'HDRI',
-      'short.lightlink': '连',
-      'short.grade': '调',
-      'short.roto': '抠',
-      'short.keygreen': '绿',
-      'short.despill': '溢',
-      'short.merge': '合',
-
-      'detail.title': '节点详情',
-      'mobile.est': '预估',
-      'mobile.time': '耗时',
-      'mobile.risk': '爆炸',
-      'mobile.cooksLeft': '剩 {n} 次',
-      'ui.close': '关闭',
-
-      'bond.title': '部门羁绊',
-      'bond.effectiveNodes': '{n} 有效节点',
-      'bond.modelName': 'Model ≥ 3',
-      'bond.modelEffect': '所有 Model 基础值 +{n}',
-      'bond.fxName': 'FX ≥ 3',
-      'bond.fxEffect': '所有爆炸概率 -{n}%',
-      'bond.lightingName': 'Lighting ≥ 3',
-      'bond.lightingEffect': '光环 ×1.3→×1.5，Light Linking ×1.2→×1.35',
-      'bond.compName': 'Comp ≥ 3',
-      'bond.compEffect': '所有 Comp 节点耗时变 0',
-      'bond.tapHint': '点徽章看说明',
-      'bond.countLine': '当前 {dept} 有效节点 {n}/3',
-
-      'score.title': '本关预估',
-      'score.kicker': '得分',
-      'score.target': '/ 目标 <b>{n}</b>',
-      'score.empty': '空',
-      'score.halved': ' · 减半',
-      'score.specialistNote': '只招专才：本关主导部门是 <b>{dept}</b>，其他部门直通 ×1 / 0h。',
-      'score.usdNote': 'USD 管线：本关第一次端口不匹配已经被放行。',
-      'score.generalistNote': '有计分链不足 3 个部门，该行得分已减半。',
-
-      'cook.title': 'Cook',
-      'cook.button': 'COOK',
-      'cook.kickerOver': '超预算',
-      'cook.kickerReady': '就绪',
-      'cook.budgetLabel': '预计耗时 / 预算',
-      'cook.ready': '可以开火',
-      'cook.chances': 'Cook 机会',
-      'cook.chancesTip': '本关最多 {n} 次 Cook',
-      'cook.maxRisk': '最高爆炸风险：<b>{chance}%</b>',
-      'cook.fxBondActive': ' · FX 羁绊已生效',
-      'cook.subOk': '达标即可交片；不达标还可以调整。',
-      'cook.viewDeck': '查看牌组',
-      'cook.howTo': '怎么玩',
-      'cook.boom': 'BOOM',
-      'cook.rescue': '救场 +{value}',
-
-      'err.cooking': 'Cook 结算中…',
-      'err.levelOver': '本关已经结束',
-      'err.noCooksLeft': 'Cook 次数已用尽',
-      'err.overBudgetNoCook': '预算超限，无法 Cook',
-      'err.overBudget': '预算超限',
-      'err.cannotPlace': '当前不能摆放',
-      'err.cannotOperate': '当前不能操作',
-      'err.badCell': '格子不存在',
-      'err.cellOccupied': '格子已被占用',
-      'err.cardNotInHand': '手牌里没有这张节点',
-      'err.noNodeHere': '这里没有节点',
-      'err.cardNotFound': '找不到节点',
-      'err.noSubstep': '只有 FX 节点有 substep',
-      'err.noVexRelic': '没有 VEX 遗物',
-      'err.vexNotNow': '现在不能使用 VEX',
-      'err.vexUsed': '本关已经用过了',
-      'err.placeFirst': '先把节点放到网格上',
-      'err.cannotContinue': '现在不能继续',
-      'err.notRelicPhase': '现在不是选遗物阶段',
-      'err.relicNotOffered': '这个遗物不在候选中',
-      'err.relicOwned': '已经拥有这个遗物',
-      'err.notInShop': '不在商店',
-      'err.alreadyBought': '已经买过了',
-      'err.noMoney': '钱不够',
-      'err.noRelicToBuy': '没有可买的遗物',
-      'err.alreadyOwn': '已经拥有',
-      'err.deleteUsed': '本次已用过删牌服务',
-      'err.keepOneCard': '牌组至少保留 1 张',
-      'err.cardNotFoundShort': '找不到这张牌',
-      'err.upgradeUsed': '本次已用过升级服务',
-      'err.alreadyUpgraded': '这张牌已经升级过了',
-
-      'toast.pickHandFirst': '先从手牌选一张节点。',
-      'toast.vexMarked': 'VEX 已标记：本关该节点输出 ×2。',
-      'toast.boughtNode': '已购入 {name}。',
-      'toast.gotRelic': '已获得遗物：{name}。',
-      'toast.confirmDelete': '确定删除 {name}？删牌服务不可撤销，花费 {price}。',
-      'toast.deleted': '已删除 {name}。',
-      'toast.upgraded': '升级完成：数值 ×{mult}。',
-      'toast.rentDead': '交不起房租，游戏结束。',
-      'toast.relicPicked': '获得遗物：{name}。',
-
-      'result.kickerClear': 'COOK · 通过',
-      'result.kickerResult': 'COOK 结果',
-      'result.title': 'Cook 结果',
-      'result.stampClear': '关卡通过',
-      'result.stampFailed': '关卡失败',
-      'result.stampCook': 'COOK 结果',
-      'result.titleClear': '达标交片',
-      'result.titleFailed': '这关没过',
-      'result.titleClose': '差一点',
-      'result.subSuccess': '目标 {target} 分，实际 {score} 分。客户很满意。',
-      'result.subFailed': '三次 Cook 结束，这关失败。没有奖励，整装去下一家。',
-      'result.subClose': '还差 {diff} 分。还可以调整节点再 Cook。',
-      'result.btnOffer': '领取梦想 offer',
-      'result.btnEnding': '面对结局',
-      'result.btnContinue': '结算并继续',
-      'result.btnAdjust': '回去调整',
-      'result.statHours': '耗时 / 预算',
-      'result.statCooks': 'Cook 剩余',
-      'result.statDiff': '分差',
-      'result.row': '第 {row} 行 · {type}',
-      'result.explosion': '第 {row} 行 {name} 爆炸（{chance}% · 爆炸前 {value}）',
-      'result.explosionJoin': '；',
-      'result.explosionCache': '。缓存习惯保留了 50% 输出。',
-      'result.explosionZero': '。该节点输出归零。',
-      'result.reward': '本关奖励 <b>+{money}</b>',
-      'result.portfolio': '　作品集网站 <b>+{money}</b>',
-      'result.midRelic': '<br>中型工作室结算：下一步可获得 <b>三选一遗物</b>。',
-
-      'deck.kicker': '牌组',
-      'deck.title': '牌组 · {n} 张',
-      'misc.cook': 'Cook',
-      'deck.sub': '每关开始随机抽 {n} 张。升级会永久保留。',
-      'deck.ownerHand': '手牌',
-      'deck.ownerField': '场上',
-
-      'help.kicker': '玩法说明',
-      'help.title': '怎么玩',
-      'help.sub': '色块原型 · 不需要美术，也不需要服务器。',
-      'help.b1.title': '1. 摆节点',
-      'help.b1.p1': '点手牌选中，再点网格空格放置。点场上节点会打开详情，并可拿回手牌。FX 节点上的 <b>− / +</b> 调整 substep。',
-      'help.b1.p2': '数据从左往右流。空格子相当于导线：节点会连到同一行左边最近的节点，每行<b>最右边</b>的节点输出进入输出口；只有输出类型等于公司要求的类型才计分。',
-      'help.b2.title': '2. 端口匹配',
-      'help.b2.p1': '每个节点只接受特定输入；左邻输出类型不匹配时线会断开（红色虚线）。源节点（Model）不需要输入。',
-      'help.b2.p2': '端口：<span style="color:#9aa4b3">■ geo</span> · <span style="color:#ff9349">▲ sim</span> · <span style="color:#4d9dff">● render</span> · <span style="color:#ffd166">◆ final</span>。',
-      'help.b3.title': '3. Cook',
-      'help.b3.p1': '点 COOK 后数值沿连线流动。FX 节点可能爆炸，输出归零、下游断流。预算超限时不能 Cook；每关默认 3 次机会，达标即可过关。',
-      'help.b3.p2': 'Cook 次数用完仍未达标 = 这关失败，没有奖励，但会继续下一关。',
-      'help.b4.title': '4. 六个月的生存',
-      'help.b4.p1': '开局 $4000，每月开始扣房租 $1000。每个月三关：零活 / 中型工作室 / Boss 梦想公司。存款 < 0 立即饿死。',
-      'help.b4.p2': '中型达标可三选一遗物；每关结束可进商店买节点、遗物、删牌或升级。',
-      'help.b5.title': '部门机制',
-      'help.b5.html': '<ul><li><b>Model</b>：源，纵列堆叠；Kitbash 吃同列其他 Model。</li><li><b>FX</b>：substep 赌博，倍率/耗时/爆炸率一起涨。</li><li><b>Lighting</b>：光环加成同列上下相邻的非 Lighting 节点。</li><li><b>Comp</b>：链越长越强；Roto 可救回上游爆炸前 60% 的值。</li></ul>',
-      'help.b6.title': '羁绊与通用',
-      'help.b6.p1': '网格上有效参与节点数达到 3，就会触发同部门羁绊（见右侧）。',
-      'help.b6.p2': '<b>Merge</b> 收左 / 左上 / 左下三路输入，求和后按来源链里的不同部门数乘算，输出最靠后的类型。',
-
-      'relic.kicker': '遗物奖励',
-      'relic.title': '中型工作室 · 三选一遗物',
-      'relic.sub': '{company} 很欣赏你的作品。选一件带进下一关。',
-      'relic.foot': '遗物不会重复获得，效果永久生效。',
-
-      'shop.kicker': '收工商店',
-      'shop.title': '{company} · 资产商店',
-      'shop.summarySuccess': '本关达标 +{money}',
-      'shop.summaryFail': '本关失败 · 无奖励',
-      'shop.summaryScore': '{score} / {target} 分',
-      'shop.summaryDefault': '关卡结算',
-      'shop.wallet': '钱包',
-      'shop.cash': '可用现金',
-      'shop.note': '删牌 / 升级各一次<br>节点可以买多张',
-      'shop.nodesTitle': '节点现货 · NODE OFFERS',
-      'shop.relicTitle': '遗物 · RELIC',
-      'shop.servicesTitle': '服务 · SERVICES',
-      'shop.deleteService': '删牌',
-      'shop.upgradeService': '升级节点',
-      'shop.used': '已使用',
-      'shop.unused': '未使用',
-      'shop.serviceNote': '删牌与升级在右侧牌组列表中直接选择目标。',
-      'shop.deckTitle': '你的牌组 · DECK ({n})',
-      'shop.legend1': '删牌/升级服务每次商店各限一次',
-      'shop.legend2': '灰色按钮 = 不可用',
-      'shop.leave': '离开商店 →',
-      'shop.buy': '购买',
-      'shop.boughtNode': '已买',
-      'shop.boughtRelic': '已购',
-      'shop.noRelic': '本店没有可购买的遗物了。',
-      'shop.deleteBtn': '删 {price}',
-      'shop.upgradeBtn': '升 {price}',
-      'shop.deleteTitle': '删牌 {price}',
-      'shop.upgradeTitle': '升级 {price}',
-      'shop.next': '下一关：第 {month} 月 · 第 {slot}/3 关 · {tier}',
-      'shop.nextRent': ' · 将扣房租 {money}',
-      'shop.lastCompany': '这是最后一家公司。',
-      'shop.offerTip': '{name}\n{desc}\n价格 {money}',
-
-      'end.deadTitle': '饿死街头',
-      'end.deadCopy': '存款 < 0，房租和盒饭都不等人。',
-      'end.broke': '存款 < 0，游戏结束。',
-      'end.victoryTitle': '梦想 OFFER',
-      'end.victoryCopy': '第六个月的 Boss 也点头了。你终于把作品投进了 {company}，明天开始交真正的片子。',
-      'end.noOfferTitle': '六个月过去了',
-      'end.noOfferCopy': '你熬过了六个月，却没有拿到梦想公司的 offer。作品还在，下一轮招聘也还会来。',
-      'end.letterTitle': '录用信 / Offer Letter',
-      'end.letterGreeting': '致我们的下一位 VFX 艺术家：',
-      'end.letterBody': '我们看了你的节点、你的缓存、以及你在预算里做出来的那些不可能。{company} 正式邀请你加入。',
-      'end.letterSalary': '薪资面议，房租有人分担。',
-      'end.letterSig': '— {company} · 招聘组',
-      'end.finalMoney': '最终存款',
-      'end.monthReached': '到达月份',
-      'end.monthValue': '第 {n} 月',
-      'end.levelsCleared': '完成关卡',
-      'end.restart': '重新开始六个月',
-      'end.dreamCompany': '梦想公司',
-      'end.rentStart': '开局交不起房租，饿死街头。',
-      'end.rentMonth': '新一个月交不起房租，游戏结束。'
-    }
-  };
-
-  function normalizeLang(lang) {
-    return lang === 'zh' ? 'zh' : 'en';
+  let LANG = 'en';
+  function setLang(l) { if (LANGS.includes(l)) LANG = l; return LANG; }
+  function getLang() { return LANG; }
+  function L(v, lang) {
+    if (v == null) return '';
+    if (typeof v === 'string' || typeof v === 'number') return String(v);
+    const l = lang || LANG;
+    return v[l] != null ? v[l] : (v.en != null ? v.en : '');
   }
-
-  /* 取界面文字。key 不存在时回退到英文，再回退到 key 本身。 */
-  function t(key, lang) {
-    const l = normalizeLang(lang);
-    const table = I18N[l] || I18N[DEFAULT_LANG];
-    if (Object.prototype.hasOwnProperty.call(table, key)) return table[key];
-    if (Object.prototype.hasOwnProperty.call(I18N.en, key)) return I18N.en[key];
-    return key;
+  function t(key, vars, lang) {
+    const l = lang || LANG;
+    const tab = I18N[l] || I18N.en;
+    let s = tab[key];
+    if (s == null) s = I18N.en[key];
+    if (s == null) return key;
+    if (vars) {
+      s = s.replace(/\{(\w+)\}/g, (m, k) => {
+        if (vars[k] == null) return m;
+        return typeof vars[k] === 'object' ? L(vars[k], l) : String(vars[k]);
+      });
+    }
+    return s;
   }
-
-  /* 构造双语文字：loc('Box', '盒子') → { en: 'Box', zh: '盒子' } */
-  function loc(en, zh) {
-    return { en: en, zh: zh };
-  }
-
-  /* 取数据表里的双语文字；传普通字符串时原样返回。 */
-  function L(value, lang) {
-    if (value == null) return '';
-    if (typeof value === 'object') {
-      const l = normalizeLang(lang);
-      if (value[l] != null) return String(value[l]);
-      if (value.en != null) return String(value.en);
-      if (value.zh != null) return String(value.zh);
-    }
-    return String(value);
-  }
-
-  /* ================================================================
-   * 3. 数据表
-   * ================================================================ */
-  const PORTS = {
-    geo:    { id: 'geo',    name: loc('Geo', '几何'),       color: '#9aa4b3', shape: 'square', rank: 0 },
-    sim:    { id: 'sim',    name: loc('Sim', '模拟'),       color: '#ff9349', shape: 'triangle', rank: 1 },
-    render: { id: 'render', name: loc('Render', '渲染图'),  color: '#4d9dff', shape: 'circle', rank: 2 },
-    final:  { id: 'final',  name: loc('Final', '成片'),     color: '#ffd166', shape: 'diamond', rank: 3 }
-  };
-  const PORT_ORDER = ['geo', 'sim', 'render', 'final'];
-
-  const DEPARTMENTS = {
-    model:    { id: 'model',    name: loc('Model', '模型'),    color: '#7f8997', text: '#eef1f5' },
-    fx:       { id: 'fx',       name: loc('FX', '特效'),       color: '#e97932', text: '#fff7ef' },
-    lighting: { id: 'lighting', name: loc('Lighting', '灯光'), color: '#337fd6', text: '#eff7ff' },
-    comp:     { id: 'comp',     name: loc('Comp', '合成'),     color: '#9561dc', text: '#fbf5ff' },
-    merge:    { id: 'merge',    name: loc('Universal', '通用'), color: '#e8e8e8', text: '#20242a' }
-  };
-
-  /* 节点表：mult = 输入 × mult；flat = 输入 + flat；base = 源基础值。
-     所有时长、倍率都集中在这里，方便平衡。 */
-  const NODE_DEFS = {
-    box: {
-      type: 'box', name: loc('Box', '盒子'), dept: 'model', input: [], output: 'geo',
-      source: true, base: 10, hours: 1,
-      desc: loc(
-        'Basic model source. Outputs 10 geo. More Model nodes in the column make the Model bond easier to trigger.',
-        '基础模型源。输出 10 几何。同列的 Model 节点越多，越容易触发 Model 羁绊。'
-      )
-    },
-    sculpt: {
-      type: 'sculpt', name: loc('Sculpt', '雕刻'), dept: 'model', input: [], output: 'geo',
-      source: true, base: 25, hours: 3,
-      desc: loc(
-        'High-poly source. Outputs 25 geo, takes 3h.',
-        '高模源。输出 25 几何，耗时 3h。'
-      )
-    },
-    kitbash: {
-      type: 'kitbash', name: loc('Kitbash', '拼装'), dept: 'model', input: [], output: 'geo',
-      source: true, base: 8, hours: 1, perOtherModel: 12,
-      desc: loc(
-        'Kitbash source. Base 8; +12 for every other Model node in the column. The backbone of vertical stacking.',
-        '拼装源。基础 8，同列每有一个其他 Model 节点 +12。是纵向堆叠的核心。'
-      )
-    },
-    scan: {
-      type: 'scan', name: loc('Scan', '扫描'), dept: 'model', input: [], output: 'geo',
-      source: true, base: 15, hours: 2, adjacentLightingMultiplier: 2,
-      desc: loc(
-        'Scan source. Base 15; ×2 when a Lighting node sits directly above or below in the column.',
-        '扫描源。基础 15；同列上下相邻有 Lighting 节点时 ×2。'
-      )
-    },
-
-    pyro: {
-      type: 'pyro', name: loc('Pyro', '火焰'), dept: 'fx', input: ['geo', 'sim'], output: 'sim',
-      source: false, mult: 2.5, hours: 2, substepMult: 1.4,
-      desc: loc(
-        'Input ×2.5, outputs sim. Raise substep to gamble for more power and time — and explosions.',
-        '输入 ×2.5 输出模拟。可用 substep 赌博提高倍率和耗时，同时提高爆炸率。'
-      )
-    },
-    flip: {
-      type: 'flip', name: loc('FLIP', '流体'), dept: 'fx', input: ['geo', 'sim'], output: 'sim',
-      source: false, mult: 2, hours: 2, substepMult: 1.6,
-      desc: loc(
-        'Input ×2, outputs sim. Each substep adds ×1.6 (higher than other FX nodes\' 1.4).',
-        '输入 ×2 输出模拟。substep 每级额外 ×1.6（比其他 FX 的 1.4 更高）。'
-      )
-    },
-    vellum: {
-      type: 'vellum', name: loc('Vellum', '布料'), dept: 'fx', input: ['geo', 'sim'], output: 'sim',
-      source: false, flat: 30, hours: 1, neverExplodes: true, substepMult: 1.4,
-      desc: loc(
-        'Input +30, outputs sim. 1h and never explodes; substep still adds output and time.',
-        '输入 +30 输出模拟。1h，永不爆炸；substep 仍会增加输出和耗时。'
-      )
-    },
-    rbd: {
-      type: 'rbd', name: loc('RBD', '破碎'), dept: 'fx', input: ['geo', 'sim'], output: 'sim',
-      source: false, hours: 2, substepMult: 1.4, rbdPerModel: 0.5,
-      desc: loc(
-        'Input ×(1 + 0.5 × upstream Model nodes in this row), outputs sim.',
-        '输入 ×(1 + 0.5 × 本行上游 Model 数)，输出模拟。'
-      )
-    },
-
-    keylight: {
-      type: 'keylight', name: loc('Key Light', '主光'), dept: 'lighting', input: ['geo', 'sim'], output: 'render',
-      source: false, mult: 1.5, hours: 1, aura: 1.3, auraKind: 'key',
-      desc: loc(
-        'Input ×1.5, outputs render. Aura: non-Lighting nodes directly above/below in the column ×1.3 (×1.5 with the Lighting bond).',
-        '输入 ×1.5 输出渲染图。光环：同列上下相邻的非 Lighting 节点输出 ×1.3（Lighting 羁绊后 ×1.5）。'
-      )
-    },
-    render: {
-      type: 'render', name: loc('Render', '渲染'), dept: 'lighting', input: ['geo', 'sim'], output: 'render',
-      source: false, mult: 2, hours: 4,
-      desc: loc(
-        'Input ×2, outputs render. Heavy: 4h; an adjacent Light Linking cuts its time.',
-        '输入 ×2 输出渲染图。重，4h；相邻 Light Linking 可减耗时。'
-      )
-    },
-    hdri: {
-      type: 'hdri', name: loc('HDRI', '环境光'), dept: 'lighting', input: ['geo', 'sim'], output: 'render',
-      source: false, mult: 1.2, hours: 1, sameColumnLightingMult: 1.5,
-      desc: loc(
-        'Input ×1.2, outputs render. ×1.5 more when other Lighting nodes share the column.',
-        '输入 ×1.2 输出渲染图。同列还有其他 Lighting 节点时自身额外 ×1.5。'
-      )
-    },
-    lightlink: {
-      type: 'lightlink', name: loc('Light Linking', '灯光链接'), dept: 'lighting', input: ['geo', 'sim'], output: 'render',
-      source: false, mult: 1, hours: 1, aura: 1.2, auraKind: 'link', renderHoursReduction: 2,
-      desc: loc(
-        'Input ×1, outputs render. Aura: non-Lighting neighbors ×1.2 (×1.35 with bond); adjacent Render in the column -2h.',
-        '输入 ×1 输出渲染图。光环：同列上下相邻的非 Lighting 节点输出 ×1.2（羁绊后 ×1.35）；同列相邻 Render 耗时 -2h。'
-      )
-    },
-
-    grade: {
-      type: 'grade', name: loc('Grade', '调色'), dept: 'comp', input: ['render', 'final'], output: 'final',
-      source: false, hours: 1, gradePerUpstream: 0.15,
-      desc: loc(
-        'Input ×(1 + 0.15 × total upstream nodes in this row), outputs final. Longer chains hit harder.',
-        '输入 ×(1 + 0.15 × 本行上游节点总数)，输出成片。链越长越强。'
-      )
-    },
-    roto: {
-      type: 'roto', name: loc('Roto', '抠像'), dept: 'comp', input: ['render', 'final'], output: 'final',
-      source: false, flat: 20, hours: 2, rescuePercent: 0.6,
-      desc: loc(
-        'Input +20, outputs final. If something upstream explodes, recovers 60% of its pre-explosion value, then +20.',
-        '输入 +20 输出成片。若本行上游有节点爆炸，会把该爆炸前值的 60% 救回来再 +20。'
-      )
-    },
-    keygreen: {
-      type: 'keygreen', name: loc('Keyer', '绿幕'), dept: 'comp', input: ['render', 'final'], output: 'final',
-      source: false, flat: 40, hours: 1,
-      desc: loc(
-        'Adds a live-action plate: input +40, outputs final.',
-        '输入 +40（加入实拍素材），输出成片。'
-      )
-    },
-    despill: {
-      type: 'despill', name: loc('Despill', '去溢色'), dept: 'comp', input: ['render', 'final'], output: 'final',
-      source: false, mult: 1.3, flat: 0, hours: 1, adjacentCompBonus: 10,
-      desc: loc(
-        'Input ×1.3, outputs final. +10 for each adjacent Comp node.',
-        '输入 ×1.3 输出成片；每有一个紧挨着的 Comp 节点，额外 +10。'
-      )
-    },
-
-    merge: {
-      type: 'merge', name: loc('Merge', '合并'), dept: 'merge', input: [], output: null,
-      source: false, hours: 1, special: 'merge',
-      desc: loc(
-        'Takes left, top-left and bottom-left. Sums inputs, then ×(1 + 0.25 × distinct departments in the source chains). Outputs the highest-ranked input type (geo<sim<render<final).',
-        '输入左、左上、左下三个格子；数值相加，再 ×(1 + 0.25 × 输入来源链中的不同部门数)。输出类型取最靠后的输入类型（geo<sim<render<final）。'
-      )
-    }
-  };
-  const NODE_TYPES = Object.keys(NODE_DEFS);
-
-  const RELICS = {
-    houdini: {
-      id: 'houdini', name: loc('Houdini Mastery', 'Houdini 精通'), icon: '**',
-      desc: loc('FX nodes take 1h less (minimum 1h).', 'FX 节点耗时 -1h（最低 1h）。')
-    },
-    vex: {
-      id: 'vex', name: loc('VEX', 'VEX'), icon: '{ }',
-      desc: loc(
-        'Once per level, mark a placed node at ×2 (the VEX button on the node).',
-        '每关可以把一个已放置节点标记为 ×2（节点上的 VEX 按钮，每关一次）。'
-      )
-    },
-    usd: {
-      id: 'usd', name: loc('USD Pipeline', 'USD 管线'), icon: 'USD',
-      desc: loc('The first port mismatch each level still connects.', '每关第一处端口不匹配也视为能连。')
-    },
-    cache: {
-      id: 'cache', name: loc('Cache Habit', '缓存习惯'), icon: '▣',
-      desc: loc('Explosions keep 50% of the output instead of zero.', '节点爆炸时保留 50% 输出而不是 0。')
-    },
-    nuke: {
-      id: 'nuke', name: loc('Nuke Hotkeys', 'Nuke 快捷键'), icon: 'N',
-      desc: loc('Comp nodes take 0h.', 'Comp 节点耗时变为 0。')
-    },
-    mentor: {
-      id: 'mentor', name: loc('Mentor', '导师'), icon: '★',
-      desc: loc('+1 Cook per level.', '每关多 1 次 Cook。')
-    },
-    caffeine: {
-      id: 'caffeine', name: loc('Caffeine Dependency', '咖啡因依赖'), icon: '☕',
-      desc: loc('+3h budget, but rent costs $200 more each month.', '预算 +3h，但每月房租 +$200。')
-    },
-    portfolio: {
-      id: 'portfolio', name: loc('Portfolio Site', '作品集网站'), icon: 'WWW',
-      desc: loc('+$100 extra for every level you clear.', '每过一关额外 +$100。')
-    }
-  };
-  const RELIC_IDS = Object.keys(RELICS);
-
-  const RULES = {
-    none: {
-      id: 'none', name: loc('No Special Rules', '无特殊规则'),
-      desc: loc('Normal gig, normal delivery.', '正常接活，正常交片。'), hard: false
-    },
-    fxhouse: {
-      id: 'fxhouse', name: loc('FX House', 'FX 专门店'),
-      desc: loc('This job wants sim output. FX nodes output ×1.5.', '本关要求输出 sim。FX 节点输出 ×1.5。'), hard: false,
-      targetOutput: 'sim'
-    },
-    adagency: {
-      id: 'adagency', name: loc('Ad Agency', '广告公司'),
-      desc: loc('This job wants final output.', '本关要求输出 final（成片）。'), hard: false,
-      targetOutput: 'final'
-    },
-    lightingjob: {
-      id: 'lightingjob', name: loc('Lighting Position', 'Lighting 职位'),
-      desc: loc('This job wants render output. Lighting auras are doubled.', '本关要求输出 render。Lighting 光环倍率翻倍。'), hard: false,
-      targetOutput: 'render'
-    },
-    generalist: {
-      id: 'generalist', name: loc('Generalist Wanted', '要全面的人'),
-      desc: loc('Any scoring row with fewer than 3 departments is halved.', '每条计分的链若少于 3 个不同部门，该行得分减半。'), hard: true
-    },
-    specialist: {
-      id: 'specialist', name: loc('Specialist Only', '只招专才'),
-      desc: loc(
-        'Besides Model, only the most common department on the grid stays effective; other departments pass through at ×1 and 0h.',
-        '除 Model 外，只有网格上出现最多的那个部门的节点有效；其他部门节点视为直通 ×1、0h。'
-      ), hard: true
-    },
-    renderfarm: {
-      id: 'renderfarm', name: loc('Render Farm Crunch', '渲染农场紧张'),
-      desc: loc('Cook budget -3h this level.', '本关 Cook 预算 -3h。'), hard: true
-    },
-    clientchange: {
-      id: 'clientchange', name: loc('Client Changed Their Mind', '客户改需求'),
-      desc: loc('Only 2 Cooks this level.', '本关 Cook 次数只有 2 次。'), hard: true
-    },
-    outsource: {
-      id: 'outsource', name: loc('Outsourcing Giant', '外包大厂'),
-      desc: loc("Target score ×0.8, but this level's reward is halved.", '目标分 ×0.8，但本关奖励减半。'), hard: false
-    }
-  };
-
-  const COMPANY_NAMES = {
-    side: [
-      loc('Sunset Shorts', '日暮短片社'),
-      loc('Blue Pencil Studio', '蓝铅笔工作室'),
-      loc('Wild Frame Animation', '野生帧动画'),
-      loc('Asteroid Post', '小行星后期'),
-      loc('White Noise Ads', '白噪音广告'),
-      loc('Evening Breeze Trailers', '晚风预告片')
-    ],
-    mid: [
-      loc('Thundercloud VFX', '雷云视效'),
-      loc('Refraction Pictures', '折光影像'),
-      loc('Wilderness Comp', '荒野合成'),
-      loc('Behind the Screen', '银幕之后'),
-      loc('Orbit Media', '轨道传媒'),
-      loc('Glass Sea Studio', '玻璃海工作室')
-    ],
-    boss: [
-      loc('Starring Pictures', '星环影业'),
-      loc('Colossus Entertainment', '巨像娱乐'),
-      loc('Skyline Studios', '天际线影业')
-    ]
-  };
-
-  /* ================================================================
-   * 4. 基础工具
-   * ================================================================ */
-  let uidCounter = 0;
-
-  function makeRng(seed) {
-    let s = (seed >>> 0) || 0x9e3779b9;
+  function mulberry32(seed) {
+    let a = seed >>> 0;
     return function () {
-      s |= 0;
-      s = (s + 0x6D2B79F5) | 0;
-      let t = Math.imul(s ^ (s >>> 15), 1 | s);
-      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+      a = (a + 0x6D2B79F5) >>> 0;
+      let x = a;
+      x = Math.imul(x ^ (x >>> 15), x | 1);
+      x ^= x + Math.imul(x ^ (x >>> 7), x | 61);
+      return ((x ^ (x >>> 14)) >>> 0) / 4294967296;
     };
   }
-
-  function createRng(seed) {
-    if (typeof seed === 'function') return seed;
-    return makeRng(seed == null ? (Date.now() ^ (Math.random() * 0xffffffff)) : seed);
+  function hashStr(s) {
+    let h = 2166136261 >>> 0;
+    for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619) >>> 0; }
+    return h.toString(36);
   }
-
-  function randInt(rng, min, max) {
-    return min + Math.floor(rng() * (max - min + 1));
-  }
-
-  function pick(rng, arr) {
-    return arr[Math.floor(rng() * arr.length)];
-  }
-
-  function shuffle(arr, rng) {
+  const pick = (rng, arr) => arr[Math.floor(rng() * arr.length)];
+  function shuffle(rng, arr) {
     const a = arr.slice();
-    for (let i = a.length - 1; i > 0; i--) {
-      const j = Math.floor(rng() * (i + 1));
-      const t = a[i]; a[i] = a[j]; a[j] = t;
-    }
+    for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(rng() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; }
     return a;
   }
+  const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+  const round1 = v => Math.round(v * 2) / 2; // half-star rounding
 
-  function clamp(n, lo, hi) { return Math.max(lo, Math.min(hi, n)); }
-  function round2(n) { return Math.round(n * 100) / 100; }
-  function sum(arr) { return arr.reduce(function (a, b) { return a + b; }, 0); }
+  /* ================================================================
+   * 1. tunables
+   * ================================================================ */
+  const CONFIG = {
+    startCash: 1500,
+    rent: 380,
+    catFood: 30,
+    weeks: 12,
+    testWeeks: { 4: 'kiln', 8: 'northlight', 12: 'halcyon' },
+    baseHours: 14,
+    dailies: 3,
+    startCols: 5, maxCols: 8,
+    startRows: 2, maxRows: 4,
+    startRam: 24, ramStep: 12, maxRam: 72,
+    farmHours: 4, farmBasePrice: 90, farmPriceStep: 40,
+    risk: [0, 0, 0.15, 0.3],
+    qualityHours: 1,
+    capUnlit: 2, capNoComp: 3.5, maxStars: 5,
+    gradeMult: { C: 1, B: 1.25, A: 1.6, S: 2.1 },
+    gradePts: { B: 2, A: 4, S: 6 },
+    killFee: 0.15,
+    solver: {
+      frames: 48, detailRate: 2.6, instBase: 1.0, instAccel: 0.08,
+      collisionMul: 0.6, guruMul: 0.78, animMul: 1.15,
+      thresholds: [30, 60, 90, 120], qDetail: [1, 1, 1.22, 1.45], qInst: [1, 1, 1.25, 1.55]
+    },
+    shop: {
+      courseMin: 90, courseMax: 210, courseCount: 3,
+      practice: 110, cpu: [380, 520, 700], gpu: [480, 720], ram: 240,
+      coffee: 45, relicCount: 2, relicMin: 220, relicMax: 360, hda: 160
+    },
+    gigPay: { base: 420, perWeek: 75 },
+    farmMaxPerJob: 3
+  };
 
-  function makeCard(type, opts) {
-    const def = NODE_DEFS[type];
-    if (!def) throw new Error('Unknown node type: ' + type);
-    opts = opts || {};
-    uidCounter += 1;
+  /* ================================================================
+   * 2. departments, ports, elements, requirements
+   * ================================================================ */
+  const DEPTS = {
+    model: { color: '#9aa7b8', name: loc('Model', '模型') },
+    plate: { color: '#7fc8a9', name: loc('Footage', '实拍') },
+    surf:  { color: '#c79a5a', name: loc('Surfacing', '材质') },
+    char:  { color: '#e86fa3', name: loc('Rig/Anim', '绑定/动画') },
+    fx:    { color: '#f08a3c', name: loc('FX', '特效') },
+    light: { color: '#4f9cf0', name: loc('Lighting', '灯光') },
+    comp:  { color: '#a876f0', name: loc('Comp', '合成') },
+    util:  { color: '#e6e6e6', name: loc('Utility', '工具') }
+  };
+
+  const ELEMENTS = {
+    fire:     { color: '#ff7a2e', name: loc('Fire', '火'), noun: [loc('Inferno', '烈焰'), loc('Firestorm', '火风暴'), loc('Ember Rain', '余烬雨'), loc('Dragon Breath', '龙息')] },
+    water:    { color: '#3fb6ff', name: loc('Water', '水'), noun: [loc('Tidal Wave', '巨浪'), loc('Flash Flood', '山洪'), loc('Splashdown', '落水'), loc('Rain Wall', '雨幕')] },
+    destr:    { color: '#c2a27a', name: loc('Destruction', '破碎'), noun: [loc('Collapse', '崩塌'), loc('Shatter', '粉碎'), loc('Demolition', '爆破'), loc('Meteor Hit', '陨石撞击')] },
+    creature: { color: '#e86fa3', name: loc('Creature', '生物'), noun: [loc('Beast Reveal', '巨兽登场'), loc('Hero Creature', '主角生物'), loc('Night Stalker', '夜行者'), loc('Little Critter', '小怪兽')] },
+    magic:    { color: '#b58cff', name: loc('Magic', '魔法'), noun: [loc('Spellcast', '施法'), loc('Portal', '传送门'), loc('Aurora', '极光'), loc('Rune Burst', '符文爆发')] }
+  };
+  const ELEMENT_IDS = Object.keys(ELEMENTS);
+
+  const REQS = {
+    tex:      { name: loc('Textured', '有材质'), hint: loc('Add a Surfacing node — clients hate grey models.', '加一个材质节点——客户讨厌灰模。'), test: s => !!s.tex },
+    lit:      { name: loc('Lit & rendered', '打光渲染'), hint: loc('Any Lighting node renders the stream.', '任意灯光节点都会渲染。'), test: s => !!s.lit },
+    final:    { name: loc('Comp\'d final', '合成成片'), hint: loc('Finish with a Comp node after Lighting.', '灯光之后接一个合成节点收尾。'), test: s => !!s.final },
+    plate:    { name: loc('On the plate', '合进实拍'), hint: loc('Merge a Plate row into your CG row, then Plate Integrate.', '用 Merge 把实拍行并进 CG 行，再接 Plate Integrate。'), test: s => !!s.onPlate },
+    night:    { name: loc('Night shot', '夜景'), hint: loc('Light it with Moonlight.', '用 Moonlight 打光。'), test: s => !!s.night },
+    env:      { name: loc('Environment', '有环境'), hint: loc('Start a row with Terrain and merge it in.', '用 Terrain 起一行再 Merge 进来。'), test: s => !!s.env },
+    stylized: { name: loc('Stylized look', '风格化'), hint: loc('Toon Shader gives the stylized look.', 'Toon Shader 给风格化外观。'), test: s => !!s.stylized },
+    grain:    { name: loc('Matched grain', '匹配颗粒'), hint: loc('Lens & Grain in comp.', '合成里加 Lens & Grain。'), test: s => !!s.grain },
+    smoke:    { name: loc('Smoke / dust', '烟尘'), hint: loc('Dust (after Debris) or Pyro Turbulence adds smoke.', 'Dust（接在 Debris 后）或 Turbulence 会产生烟。'), test: s => !!s.smoke },
+    polish:   { name: loc('Polish ≥ {n}', '打磨 ≥ {n}'), hint: loc('Grade, Three-Point, look-dev matches and quality tiers add polish.', 'Grade、三点光、材质对口和质量档都加打磨。'), test: (s, n) => (s.polish || 0) >= n }
+  };
+
+  /* ================================================================
+   * 3. nodes
+   * ================================================================ */
+  function newStream() {
     return {
-      uid: 'c' + uidCounter,
-      type: type,
-      upgraded: !!opts.upgraded,
-      substep: clamp(opts.substep == null ? 1 : opts.substep, 1, 4),
-      vexed: !!opts.vexed
+      geo: false, organic: false, hard: false, env: false, scanned: false, plate: false,
+      tex: false, texMatch: false, stylized: false, rig: false, anim: false,
+      lit: false, night: false, final: false, onPlate: false, grain: false, smoke: false,
+      polish: 0, dead: false, deadEl: null, deadStep: 0,
+      step: { fire: 0, water: 0, destr: 0, creature: 0, magic: 0 },
+      bonus: { fire: 0, water: 0, destr: 0, creature: 0, magic: 0 },
+      depts: [], model: null, log: [], rows: 1
+    };
+  }
+  function cloneStream(s) {
+    const n = Object.assign({}, s);
+    n.step = Object.assign({}, s.step);
+    n.bonus = Object.assign({}, s.bonus);
+    n.depts = s.depts.slice();
+    n.log = s.log.slice();
+    return n;
+  }
+  function addDept(s, d) { if (!s.depts.includes(d)) s.depts.push(d); }
+  const tierPolish = (ctx) => (ctx.fail ? 0 : Math.max(0, (ctx.card.q || 1) - 1));
+  const tierStars = (ctx) => (ctx.fail ? 0 : 0.5 * Math.max(0, (ctx.card.q || 1) - 1));
+
+  function heroStep(el, step, extra) {
+    // generic hero-chain node: requires previous step, sets step
+    return {
+      check(s) {
+        if (step === 1) {
+          if (extra && extra.needs && !extra.needs(s)) return extra.needsErr;
+          if (!s.geo && !(extra && extra.anyStream)) return 'err.needGeo';
+          return null;
+        }
+        if (s.step[el] < step - 1) return 'err.needStep';
+        return null;
+      },
+      apply(s, ctx) {
+        if (ctx.fail) { s.log.push('fail.' + ctx.def.dept); return; }
+        s.step[el] = Math.max(s.step[el], step);
+        s.bonus[el] += tierStars(ctx);
+        if (extra && extra.apply) extra.apply(s, ctx);
+      },
+      hero: { el, step }
     };
   }
 
-  function emptyGrid() {
-    return [
-      [null, null, null, null, null, null],
-      [null, null, null, null, null, null],
-      [null, null, null, null, null, null]
-    ];
+  function solverNode(el, step) {
+    return {
+      solver: true,
+      hero: { el, step },
+      check(s) { return s.step[el] < step - 1 ? 'err.needStep' : null; },
+      apply(s, ctx) {
+        const r = ctx.solver;
+        if (r && r.diverged) {
+          s.dead = true; s.deadEl = el; s.deadStep = step; s.log.push('diverged');
+          return;
+        }
+        s.step[el] = Math.max(s.step[el], step);
+        if (r) s.bonus[el] += r.bonus || 0;
+        if (s.anim && el !== 'creature') s.bonus[el] += 0.5; // character drives the sim
+      }
+    };
   }
 
-  function normalizeGrid(grid) {
-    const out = emptyGrid();
-    if (!grid) return out;
-    for (let r = 0; r < 3; r++) {
-      for (let c = 0; c < 6; c++) {
-        const v = grid[r] && grid[r][c];
-        if (!v) continue;
-        if (typeof v === 'string') {
-          out[r][c] = { uid: 'tmp-' + r + '-' + c, type: v, upgraded: false, substep: 1, vexed: false };
-        } else {
-          out[r][c] = v;
+  const N = {};
+  function def(id, o) { o.id = id; N[id] = o; return o; }
+
+  // --- MODEL (sources) ---
+  def('box', { dept: 'model', h: 1, ram: 2, q: true, source: true,
+    name: loc('Box', '盒子'), desc: loc('Basic geometry. Starts a stream.', '基础几何体，起一条数据流。'),
+    apply(s, ctx) { s.geo = true; s.model = 'box'; s.polish += tierPolish(ctx); } });
+  def('sculpt', { dept: 'model', h: 2, ram: 6, q: true, source: true,
+    name: loc('Sculpt', '雕刻'), desc: loc('Organic geo. Creatures need it. Pairs with Skin Shader.', '有机模型。生物需要它；和 Skin Shader 对口。'),
+    apply(s, ctx) { s.geo = true; s.organic = true; s.model = 'organic'; s.polish += tierPolish(ctx); } });
+  def('hardsurf', { dept: 'model', h: 2, ram: 4, q: true, source: true,
+    name: loc('Hard Surface', '硬表面'), desc: loc('Hard-surface geo. Fracture +0.5★. Pairs with Metal Shader.', '硬表面模型。Fracture +0.5★；和 Metal Shader 对口。'),
+    apply(s, ctx) { s.geo = true; s.hard = true; s.model = 'hard'; s.polish += tierPolish(ctx); } });
+  def('terrain', { dept: 'model', h: 2, ram: 6, q: true, source: true,
+    name: loc('Terrain', '地形'), desc: loc('Environment geo. Satisfies “Environment”. Pairs with Texture Paint.', '环境模型，满足“有环境”；和 Texture Paint 对口。'),
+    apply(s, ctx) { s.geo = true; s.env = true; s.model = 'env'; s.polish += tierPolish(ctx); } });
+  def('scan', { dept: 'model', h: 3, ram: 8, q: true, source: true,
+    name: loc('Photo Scan', '扫描模型'), desc: loc('Scanned asset: comes textured, +1 polish. Heavy.', '扫描资产：自带材质，+1 打磨。很吃内存。'),
+    apply(s, ctx) { s.geo = true; s.scanned = true; s.tex = true; s.hard = true; s.model = 'scan'; s.polish += 1 + tierPolish(ctx); } });
+  def('plate', { dept: 'plate', h: 0, ram: 2, source: true,
+    name: loc('Plate', '实拍素材'), desc: loc('Live-action footage. Merge it into a CG row.', '实拍画面。用 Merge 并进 CG 行。'),
+    apply(s) { s.plate = true; s.model = s.model || null; } });
+
+  // --- SURFACING ---
+  function surf(id, o) {
+    o.dept = 'surf'; o.q = true;
+    o.check = s => (!s.geo ? 'err.needGeo' : null);
+    const extra = o.extra;
+    o.apply = function (s, ctx) {
+      if (ctx.fail) { s.log.push('fail.surf'); return; }
+      s.tex = true;
+      s.polish += tierPolish(ctx);
+      const m = o.match(s);
+      if (m === true) { s.texMatch = true; s.polish += 1 + (ctx.relics.has('lookdev') ? 1 : 0); }
+      else if (m === false) s.polish -= 1;
+      if (extra) extra(s, ctx);
+    };
+    return def(id, o);
+  }
+  surf('shader', { h: 1, ram: 2, name: loc('Basic Shader', '基础材质'), desc: loc('Textures the stream. No look-dev match.', '给数据流上材质，不算对口。'), match: () => null });
+  surf('paint', { h: 2, ram: 4, name: loc('Texture Paint', '手绘贴图'), desc: loc('Match: Terrain or Sculpt (+1 polish). Box: neutral.', '对口：Terrain 或 Sculpt（+1 打磨）。'), match: s => (s.env || s.organic) ? true : (s.hard ? false : null) });
+  surf('skin', { h: 2, ram: 4, name: loc('Skin Shader', '皮肤材质'), desc: loc('SSS skin. Match: Sculpt (+1 polish). Mismatch -1.', 'SSS 皮肤。对口 Sculpt（+1 打磨），不对口 -1。'), match: s => s.organic ? true : false });
+  surf('metal', { h: 2, ram: 4, name: loc('Metal Shader', '金属材质'), desc: loc('Match: Hard Surface / Scan (+1 polish). Mismatch -1.', '对口：硬表面 / 扫描（+1 打磨），不对口 -1。'), match: s => s.hard ? true : false });
+  surf('toon', { h: 1, ram: 2, name: loc('Toon Shader', '卡通材质'), desc: loc('Stylized look. Always a match, but never “realistic”.', '风格化外观。总算对口。'), match: () => true, extra: s => { s.stylized = true; } });
+
+  // --- RIG / ANIM (creature chain) ---
+  def('rig', Object.assign({ dept: 'char', h: 2, ram: 3, q: true,
+    name: loc('Rig', '绑定'), desc: loc('Creature ★1. Needs Sculpt geo.', '生物 ★1。需要 Sculpt 模型。') },
+  heroStep('creature', 1, { needs: s => s.organic, needsErr: 'err.needOrganic', apply: s => { s.rig = true; } })));
+  def('animate', Object.assign({ dept: 'char', h: 3, ram: 3, q: true,
+    name: loc('Animate', '动画'), desc: loc('Creature ★2. Animated input gives any later FX solver +0.5★.', '生物 ★2。之后的 FX 解算器吃到动画 +0.5★。') },
+  heroStep('creature', 2, { apply: s => { s.anim = true; } })));
+  def('mocap', Object.assign({ dept: 'char', h: 2, ram: 2,
+    name: loc('Mocap Cleanup', '动捕清理'), desc: loc('Creature ★2, no risk, no tiers. Cheap and steady.', '生物 ★2，零风险但没有质量档。') },
+  heroStep('creature', 2, { apply: s => { s.anim = true; } })));
+  def('muscle', Object.assign({ dept: 'char', h: 2, ram: 4, q: true,
+    name: loc('Muscle Jiggle', '肌肉抖动'), desc: loc('Creature ★3 — the safe alternative to Vellum.', '生物 ★3——Vellum 的稳妥替代。') },
+  heroStep('creature', 3)));
+  def('vellum', Object.assign({ dept: 'fx', h: 2, ram: 8, q: true,
+    name: loc('Vellum Cloth', 'Vellum 布料'), desc: loc('SOLVER. Creature ★3 + live sim bonus.', '解算器。生物 ★3 + 实时解算加成。') },
+  solverNode('creature', 3)));
+  def('groom', Object.assign({ dept: 'char', h: 3, ram: 6, q: true,
+    name: loc('Groom', '毛发'), desc: loc('Creature ★4. Fur sells the creature.', '生物 ★4。毛发让生物成立。') },
+  heroStep('creature', 4)));
+
+  // --- FX: fire ---
+  def('pyrosrc', Object.assign({ dept: 'fx', h: 1, ram: 2, q: true,
+    name: loc('Pyro Source', '火源'), desc: loc('Fire ★1. Emits fuel from geo.', '火 ★1。从模型发射燃料。') }, heroStep('fire', 1)));
+  def('pyro', Object.assign({ dept: 'fx', h: 2, ram: 12, q: true,
+    name: loc('Pyro Solver', 'Pyro 解算'), desc: loc('SOLVER. Fire ★2 + live sim bonus.', '解算器。火 ★2 + 实时解算加成。') }, solverNode('fire', 2)));
+  def('turb', Object.assign({ dept: 'fx', h: 1, ram: 4, q: true,
+    name: loc('Turbulence', '湍流'), desc: loc('Fire ★3. Adds smoke.', '火 ★3。会产生烟。') }, heroStep('fire', 3, { apply: s => { s.smoke = true; } })));
+  def('upres', Object.assign({ dept: 'fx', h: 3, ram: 14, q: true,
+    name: loc('Upres', '升分辨率'), desc: loc('Fire ★4. Heavy on RAM.', '火 ★4。很吃内存。') }, heroStep('fire', 4)));
+  // --- FX: water ---
+  def('flipsrc', Object.assign({ dept: 'fx', h: 1, ram: 2, q: true,
+    name: loc('FLIP Source', '流体源'), desc: loc('Water ★1.', '水 ★1。') }, heroStep('water', 1)));
+  def('flip', Object.assign({ dept: 'fx', h: 3, ram: 16, q: true,
+    name: loc('FLIP Solver', 'FLIP 解算'), desc: loc('SOLVER. Water ★2 + live sim bonus. Very heavy.', '解算器。水 ★2 + 实时解算加成。非常重。') }, solverNode('water', 2)));
+  def('white', Object.assign({ dept: 'fx', h: 2, ram: 6, q: true,
+    name: loc('Whitewater', '白水'), desc: loc('Water ★3. Foam and spray.', '水 ★3。泡沫和水花。') }, heroStep('water', 3)));
+  def('mesher', Object.assign({ dept: 'fx', h: 2, ram: 8, q: true,
+    name: loc('Mesher', '网格化'), desc: loc('Water ★4.', '水 ★4。') }, heroStep('water', 4)));
+  // --- FX: destruction ---
+  def('fracture', Object.assign({ dept: 'fx', h: 1, ram: 3, q: true,
+    name: loc('Fracture', '破碎'), desc: loc('Destruction ★1. +0.5★ on Hard Surface.', '破碎 ★1。硬表面上 +0.5★。') },
+  heroStep('destr', 1, { apply: s => { if (s.hard) s.bonus.destr += 0.5; } })));
+  def('rbd', Object.assign({ dept: 'fx', h: 2, ram: 10, q: true,
+    name: loc('RBD Solver', '刚体解算'), desc: loc('SOLVER. Destruction ★2 + live sim bonus.', '解算器。破碎 ★2 + 实时解算加成。') }, solverNode('destr', 2)));
+  def('debris', Object.assign({ dept: 'fx', h: 1, ram: 4, q: true,
+    name: loc('Debris', '碎屑'), desc: loc('Destruction ★3.', '破碎 ★3。') }, heroStep('destr', 3)));
+  def('dust', Object.assign({ dept: 'fx', h: 2, ram: 8, q: true,
+    name: loc('Dust', '烟尘'), desc: loc('Destruction ★4. Adds smoke.', '破碎 ★4。会产生烟。') }, heroStep('destr', 4, { apply: s => { s.smoke = true; } })));
+  // --- FX: magic ---
+  def('popsrc', Object.assign({ dept: 'fx', h: 1, ram: 2, q: true,
+    name: loc('Particles', '粒子'), desc: loc('Magic ★1. Works on geo or a Plate.', '魔法 ★1。模型或实拍上都能发射。') },
+  heroStep('magic', 1, { anyStream: true })));
+  def('pop', Object.assign({ dept: 'fx', h: 2, ram: 6, q: true,
+    name: loc('POP Solver', '粒子解算'), desc: loc('SOLVER. Magic ★2 + live sim bonus.', '解算器。魔法 ★2 + 实时解算加成。') }, solverNode('magic', 2)));
+  def('trails', Object.assign({ dept: 'fx', h: 1, ram: 3, q: true,
+    name: loc('Trails', '拖尾'), desc: loc('Magic ★3.', '魔法 ★3。') }, heroStep('magic', 3)));
+
+  // --- LIGHTING ---
+  function light(id, o) {
+    o.dept = 'light';
+    if (o.q == null) o.q = true;
+    const base = o.extra;
+    o.check = o.check || (s => (!s.geo ? 'err.needGeo' : null));
+    o.apply = function (s, ctx) {
+      s.lit = true;
+      if (!s.tex && !s.stylized) s.polish -= 1; // grey model lit = ugly
+      if (ctx.fail) { s.polish -= 2; s.log.push('fail.light'); }
+      else s.polish += tierPolish(ctx);
+      if (base) base(s, ctx);
+    };
+    return def(id, o);
+  }
+  light('light', { h: 1, ram: 4, name: loc('Basic Light', '基础灯光'), desc: loc('Lights & renders the stream.', '打光并渲染。') });
+  light('threept', { h: 2, ram: 4, name: loc('Three-Point', '三点布光'), desc: loc('Lit, +1 polish.', '打光，+1 打磨。'), extra: s => { s.polish += 1; } });
+  light('hdri', { h: 1, ram: 4, name: loc('HDRI Dome', 'HDRI 环境光'), desc: loc('Lit. +2 polish if Environment is in the stream.', '打光。流里有环境时 +2 打磨。'), extra: s => { if (s.env) s.polish += 2; } });
+  light('moon', { h: 1, ram: 4, name: loc('Moonlight', '月光'), desc: loc('Lit, makes it a night shot.', '打光，变成夜景。'), extra: s => { s.night = true; } });
+  light('firelight', { h: 2, ram: 6, name: loc('Fire Light', '火光照明'), desc: loc('Needs fire. Lit, fire +0.5★, +1 polish.', '需要火。打光，火 +0.5★，+1 打磨。'),
+    check: s => (!s.geo ? 'err.needGeo' : (s.step.fire < 1 ? 'err.needFire' : null)),
+    extra: s => { s.bonus.fire += 0.5; s.polish += 1; } });
+  light('pathtrace', { h: 5, ram: 16, name: loc('Path Tracer', '路径追踪'), desc: loc('Lit, +2 polish. Slow, heavy.', '打光，+2 打磨。又慢又重。'), extra: s => { s.polish += 2; } });
+
+  // --- COMP ---
+  function comp(id, o) {
+    o.dept = 'comp';
+    if (o.q == null) o.q = true;
+    const base = o.extra;
+    o.check = o.check || (s => (!s.lit ? 'err.needLit' : null));
+    o.apply = function (s, ctx) {
+      s.final = true;
+      if (ctx.fail) { s.polish -= 1; s.log.push('fail.comp'); }
+      else s.polish += tierPolish(ctx);
+      if (base) base(s, ctx);
+    };
+    return def(id, o);
+  }
+  comp('comp', { h: 1, ram: 2, name: loc('Basic Comp', '基础合成'), desc: loc('Finishes the shot (final).', '完成镜头（成片）。') });
+  comp('plateint', { h: 2, ram: 4, name: loc('Plate Integrate', '实拍合成'), desc: loc('Needs a Plate merged in. Final + “On the plate”.', '需要并进实拍。成片 + 合进实拍。'),
+    check: s => (!s.lit ? 'err.needLit' : (!s.plate ? 'err.needPlate' : null)),
+    extra: s => { s.onPlate = true; } });
+  comp('grade', { h: 1, ram: 2, name: loc('Grade', '调色'), desc: loc('Final, +1 polish (+1 more with LUT Library).', '成片，+1 打磨（LUT 库再 +1）。'),
+    extra: (s, ctx) => { s.polish += 1 + (ctx.relics.has('lut') ? 1 : 0); } });
+  comp('lens', { h: 1, ram: 2, name: loc('Lens & Grain', '镜头与颗粒'), desc: loc('Final, matched grain, +1 polish.', '成片，匹配颗粒，+1 打磨。'), extra: s => { s.grain = true; s.polish += 1; } });
+  comp('haze', { h: 1, ram: 2, name: loc('Heat Haze', '热浪扭曲'), desc: loc('Needs fire. Final, fire +0.5★.', '需要火。成片，火 +0.5★。'),
+    check: s => (!s.lit ? 'err.needLit' : (s.step.fire < 1 ? 'err.needFire' : null)), extra: s => { s.bonus.fire += 0.5; } });
+  def('glow', { dept: 'comp', h: 1, ram: 2, q: true, hero: { el: 'magic', step: 4 },
+    name: loc('Glow', '辉光'), desc: loc('Magic ★4. Needs Trails and Lighting. Final.', '魔法 ★4。需要拖尾和灯光。成片。'),
+    check: s => (!s.lit ? 'err.needLit' : (s.step.magic < 3 ? 'err.needStep' : null)),
+    apply(s, ctx) { s.final = true; if (ctx.fail) { s.log.push('fail.comp'); return; } s.step.magic = Math.max(s.step.magic, 4); s.bonus.magic += tierStars(ctx); } });
+  def('roto', { dept: 'comp', h: 2, ram: 2, rescue: true,
+    name: loc('Roto Rescue', 'Roto 救场'), desc: loc('“Fix it in comp.” Revives a diverged sim one ★ lower. Final if lit.', '“后期再修”。把发散的解算救回来，低一档。打过光则成片。'),
+    check: s => null,
+    apply(s) {
+      if (s.dead) {
+        s.dead = false;
+        s.step[s.deadEl] = Math.max(s.step[s.deadEl], s.deadStep - 1);
+        s.log.push('rescued');
+        s.deadEl = null;
+      }
+      if (s.lit) s.final = true;
+    } });
+
+  // --- UTILITY ---
+  def('merge', { dept: 'util', h: 1, ram: 2, merge: true,
+    name: loc('Merge', '合并'), desc: loc('Combines the streams from left, upper-left and lower-left.', '合并左、左上、左下三路数据流。') });
+  def('collision', { dept: 'util', h: 1, ram: 2, util: true,
+    name: loc('Collision', '碰撞体'), desc: loc('Solvers directly left, above or below it are 40% more stable. Passes stream through.', '紧挨着的左/上/下解算器稳定 40%。数据直通。') });
+
+  const NODE_DEFS = N;
+  const NODE_IDS = Object.keys(N);
+
+  /* ================================================================
+   * 4. relics
+   * ================================================================ */
+  const RELICS = {
+    guru:     { icon: 'guru', name: loc('Houdini Guru', 'Houdini 大神'), desc: loc('All solvers 22% more stable.', '所有解算器稳定 22%。') },
+    nerd_fire:     { icon: 'nerd', el: 'fire', name: loc('Pyro Nerd', '火焰狂人'), desc: loc('Fire +0.5★; +0.5★ more if fire is the only hero element.', '火 +0.5★；镜头里只有火时再 +0.5★。') },
+    nerd_water:    { icon: 'nerd', el: 'water', name: loc('Water Wrangler', '驯水师'), desc: loc('Water +0.5★; +0.5★ more if it is the only hero element.', '水 +0.5★；只有水时再 +0.5★。') },
+    nerd_destr:    { icon: 'nerd', el: 'destr', name: loc('Demolition Fan', '拆迁爱好者'), desc: loc('Destruction +0.5★; +0.5★ more if alone.', '破碎 +0.5★；只有破碎时再 +0.5★。') },
+    nerd_creature: { icon: 'nerd', el: 'creature', name: loc('Creature Whisperer', '生物低语者'), desc: loc('Creature +0.5★; +0.5★ more if alone.', '生物 +0.5★；只有生物时再 +0.5★。') },
+    nerd_magic:    { icon: 'nerd', el: 'magic', name: loc('Spell Weaver', '织法者'), desc: loc('Magic +0.5★; +0.5★ more if alone.', '魔法 +0.5★；只有魔法时再 +0.5★。') },
+    usd:      { icon: 'usd', name: loc('USD Pipeline', 'USD 管线'), desc: loc('Merge costs 0h and adds +1 polish.', 'Merge 不耗时，且 +1 打磨。') },
+    farm:     { icon: 'farm', name: loc('Farm Account', '农场账户'), desc: loc('Render farm hours cost half.', '渲染农场半价。') },
+    caffeine: { icon: 'coffee', name: loc('Caffeine Habit', '咖啡因依赖'), desc: loc('+3h every week. Rent +$25 (coffee).', '每周 +3 小时。房租 +$25（咖啡钱）。') },
+    monitor:  { icon: 'monitor', name: loc('Second Monitor', '第二块屏'), desc: loc('See hidden client requirements before the first cook.', '第一次 Cook 前就能看到客户的隐藏要求。') },
+    notebook: { icon: 'book', name: loc('Mira\'s Notebook', 'Mira 的笔记本'), desc: loc('+1 dailies per job.', '每个活 +1 次 dailies。') },
+    backup:   { icon: 'drive', name: loc('Backup Drive', '备份硬盘'), desc: loc('Immune to hardware disasters.', '免疫硬件灾难事件。') },
+    lut:      { icon: 'lut', name: loc('LUT Library', 'LUT 库'), desc: loc('Grade gives +1 more polish.', 'Grade 多 +1 打磨。') },
+    wedge:    { icon: 'wedge', name: loc('Wedge Script', 'Wedge 脚本'), desc: loc('Sim viewer shows the predicted divergence frame.', '解算窗口显示预测的发散帧。') },
+    hda:      { icon: 'hda', name: loc('HDA Toolkit', 'HDA 工具箱'), desc: loc('Unlocks “Package HDA” in the shop: fuse two nodes into one cell.', '商店解锁“打包 HDA”：两个节点合成一格。') },
+    pip:      { icon: 'cat', name: loc('Pip on the Desk', '桌上的 Pip'), desc: loc('Once per job, a failed quality roll is undone. (Pip hit Ctrl+Z.)', '每个活一次，失败的质量判定被撤销（Pip 踩到了 Ctrl+Z）。') },
+    website:  { icon: 'web', name: loc('Portfolio Website', '作品集网站'), desc: loc('Studio tests: +2 polish. Reel shots +$60 when delivered.', '工作室测试 +2 打磨。每个进 reel 的镜头 +$60。') },
+    hotkeys:  { icon: 'keys', name: loc('Nuke Hotkeys', 'Nuke 快捷键'), desc: loc('Comp nodes cost 0h.', '合成节点不耗时。') },
+    lookdev:  { icon: 'eye', name: loc('Look-dev Eye', '材质眼'), desc: loc('Look-dev matches give +1 more polish.', '材质对口多 +1 打磨。') },
+    confidence: { icon: 'star', name: loc('Quiet Confidence', '底气'), desc: loc('You turned down an offer. +1 dailies on studio tests, +1 polish everywhere.', '你拒绝过 offer。工作室测试 +1 dailies，所有镜头 +1 打磨。') }
+  };
+  const SHOP_RELICS = ['guru', 'usd', 'farm', 'caffeine', 'monitor', 'notebook', 'backup', 'lut', 'wedge', 'hda', 'website', 'hotkeys', 'lookdev',
+    'nerd_fire', 'nerd_water', 'nerd_destr', 'nerd_creature', 'nerd_magic'];
+
+  /* ================================================================
+   * 5. backgrounds (starting builds)
+   * ================================================================ */
+  const BASICS = ['box', 'box', 'shader', 'light', 'light', 'comp', 'comp', 'merge', 'plate'];
+  const BACKGROUNDS = {
+    pyro:     { el: 'fire', relic: 'nerd_fire', cards: ['pyrosrc', 'pyro', 'turb', 'collision', 'hardsurf'], cash: 0,
+      name: loc('Pyro TD', 'Pyro TD'), desc: loc('Fire specialist. Starts with a Pyro chain and Pyro Nerd.', '火焰专精。开局有 Pyro 链和火焰狂人。') },
+    water:    { el: 'water', relic: 'nerd_water', cards: ['flipsrc', 'flip', 'white', 'collision', 'terrain'], cash: 0,
+      name: loc('Water Wrangler', '驯水师'), desc: loc('Water specialist. FLIP chain, but FLIP is heavy.', '水专精。FLIP 链，但 FLIP 很重。') },
+    creature: { el: 'creature', relic: 'nerd_creature', cards: ['sculpt', 'skin', 'rig', 'mocap', 'muscle'], cash: 0,
+      name: loc('Creature Artist', '生物艺术家'), desc: loc('Creature specialist. Safe, steady chain with no solver.', '生物专精。稳的链，没有解算器。') },
+    generalist: { el: null, relic: 'usd', cards: ['fracture', 'rbd', 'popsrc', 'threept', 'grade', 'hardsurf'], cash: 200,
+      name: loc('Generalist', '多面手'), desc: loc('A bit of everything, USD Pipeline and +$200.', '什么都会一点，USD 管线，+$200。') }
+  };
+
+  /* ================================================================
+   * 6. evaluate a grid
+   * ================================================================ */
+  function emptyGrid(rows, cols) {
+    const g = [];
+    for (let r = 0; r < rows; r++) { g.push(new Array(cols).fill(null)); }
+    return g;
+  }
+  let UID = 1;
+  function makeCard(type, o) {
+    return Object.assign({ uid: 'c' + (UID++), type, q: 1, up: 0 }, o || {});
+  }
+  function cardParts(card) { return card.parts && card.parts.length ? card.parts : [card.type]; }
+  function cardDept(card) { return NODE_DEFS[cardParts(card)[0]].dept; }
+  function isSolverCard(card) { return cardParts(card).some(p => NODE_DEFS[p].solver); }
+  function cardHasQuality(card) { return !card.parts && !!NODE_DEFS[card.type].q; }
+
+  function cardHours(card, relics) {
+    relics = relics instanceof Set ? relics : new Set(relics || []);
+    const parts = cardParts(card);
+    let h = 0;
+    for (const p of parts) {
+      const d = NODE_DEFS[p];
+      let x = d.h;
+      if (d.dept === 'comp' && relics.has('hotkeys')) x = 0;
+      if (d.merge && relics.has('usd')) x = 0;
+      h += x;
+    }
+    if (parts.length > 1) h -= 1;
+    h += ((card.q || 1) - 1) * CONFIG.qualityHours;
+    h -= (card.up || 0);
+    return Math.max(0, h);
+  }
+  function cardRam(card) {
+    const parts = cardParts(card);
+    let r = 0;
+    for (const p of parts) r = Math.max(r, NODE_DEFS[p].ram);
+    return Math.round(r * (1 + 0.5 * ((card.q || 1) - 1)));
+  }
+  function cardRisk(card) {
+    if (!cardHasQuality(card) || isSolverCard(card)) return 0;
+    const q = card.q || 1;
+    return CONFIG.risk[q] * ((card.up || 0) > 0 ? 0.5 : 1);
+  }
+
+  function mergeStreams(list) {
+    const valid = list.filter(Boolean);
+    if (!valid.length) return null;
+    const s = cloneStream(valid[0]);
+    for (let i = 1; i < valid.length; i++) {
+      const o = valid[i];
+      for (const k of ['geo', 'organic', 'hard', 'env', 'scanned', 'plate', 'tex', 'texMatch', 'stylized', 'rig', 'anim', 'lit', 'night', 'final', 'onPlate', 'grain', 'smoke']) s[k] = s[k] || o[k];
+      for (const e of ELEMENT_IDS) {
+        if (o.step[e] > s.step[e] || (o.step[e] === s.step[e] && o.bonus[e] > s.bonus[e])) { s.step[e] = o.step[e]; s.bonus[e] = o.bonus[e]; }
+      }
+      s.polish = Math.max(s.polish, o.polish) + Math.min(s.polish, o.polish) * 0.5;
+      if (o.dead && !s.dead) { s.dead = true; s.deadEl = o.deadEl; s.deadStep = o.deadStep; }
+      for (const d of o.depts) addDept(s, d);
+      if (!s.model && o.model) s.model = o.model;
+      s.rows += o.rows;
+    }
+    s.polish = Math.floor(s.polish);
+    return s;
+  }
+
+  function collisionNear(grid, r, c) {
+    const R = grid.length;
+    const isCol = (rr, cc) => rr >= 0 && rr < R && cc >= 0 && grid[rr][cc] && cardParts(grid[rr][cc]).includes('collision');
+    return isCol(r - 1, c) || isCol(r + 1, c) || isCol(r, c + 1) || isCol(r, c - 1);
+  }
+
+  /* stars for a final stream */
+  function streamStars(s, relics, el) {
+    relics = relics instanceof Set ? relics : new Set(relics || []);
+    if (!s || s.dead) return 0;
+    let v = s.step[el] > 0 ? s.step[el] + s.bonus[el] : 0;
+    if (v <= 0) return 0;
+    const heroes = ELEMENT_IDS.filter(e => s.step[e] > 0);
+    if (relics.has('nerd_' + el)) v += 0.5 + (heroes.length === 1 ? 0.5 : 0);
+    let cap = CONFIG.maxStars;
+    if (!s.lit) cap = CONFIG.capUnlit; else if (!s.final) cap = CONFIG.capNoComp;
+    return clamp(round1(v), 0, cap);
+  }
+  function streamCap(s) { if (!s) return 0; if (!s.lit) return CONFIG.capUnlit; if (!s.final) return CONFIG.capNoComp; return CONFIG.maxStars; }
+  function dominantElement(s, relics) {
+    if (!s) return null;
+    let best = null, bv = 0;
+    for (const e of ELEMENT_IDS) { const v = streamStars(s, relics, e); if (v > bv) { bv = v; best = e; } }
+    return best;
+  }
+
+  function evaluate(grid, o) {
+    o = o || {};
+    const R = grid.length, C = grid[0].length;
+    const relics = o.relics instanceof Set ? o.relics : new Set(o.relics || []);
+    const solverRes = o.solverResults || {};
+    const fails = o.fails || {};
+    const streams = [], sigs = [], cells = [];
+    for (let r = 0; r < R; r++) { streams.push([]); sigs.push([]); cells.push([]); }
+    let hours = 0;
+    const colRam = new Array(C).fill(0);
+    for (let c = 0; c < C; c++) {
+      for (let r = 0; r < R; r++) {
+        const prev = c > 0 ? streams[r][c - 1] : null;
+        const prevSig = c > 0 ? sigs[r][c - 1] : '';
+        const card = grid[r][c];
+        if (!card) { streams[r][c] = prev; sigs[r][c] = prevSig; cells[r][c] = { empty: true, stream: prev }; continue; }
+        const key = r + ',' + c;
+        hours += cardHours(card, relics);
+        colRam[c] += cardRam(card);
+        const parts = cardParts(card);
+        let sig = (card.parts ? card.parts.join('+') : card.type) + ':' + (card.q || 1) + ':' + (card.up || 0) + ':' + (card.nonce || 0) + '<' + prevSig + '>';
+        let s = prev ? cloneStream(prev) : null;
+        let err = null;
+        for (const p of parts) {
+          const d = NODE_DEFS[p];
+          const ctx = { card, def: d, key, r, c, relics, solver: solverRes[key], fail: !!fails[key], grid };
+          if (d.source) {
+            s = newStream(); d.apply(s, ctx); addDept(s, d.dept);
+          } else if (d.merge) {
+            const up = (r > 0 && c > 0) ? streams[r - 1][c - 1] : null;
+            const dn = (r < R - 1 && c > 0) ? streams[r + 1][c - 1] : null;
+            sig += '{' + (r > 0 && c > 0 ? sigs[r - 1][c - 1] : '') + '|' + (r < R - 1 && c > 0 ? sigs[r + 1][c - 1] : '') + '}';
+            const m = mergeStreams([s, up, dn]);
+            if (!m) { err = 'err.noInput'; break; }
+            s = m; addDept(s, 'util');
+            if (relics.has('usd')) s.polish += 1;
+          } else if (d.util) {
+            // passthrough (stream may be null)
+          } else {
+            if (!s) { err = 'err.noInput'; break; }
+            if (s.dead && !d.rescue) { err = 'err.deadInput'; break; }
+            const e = d.check ? d.check(s, ctx) : null;
+            if (e) { err = e; break; }
+            d.apply(s, ctx);
+            addDept(s, d.dept);
+          }
+        }
+        if (err && !(err === 'err.deadInput' && s && s.dead)) s = null;
+        streams[r][c] = s;
+        sigs[r][c] = hashStr(sig);
+        cells[r][c] = { status: err ? 'err' : 'ok', err, stream: s, key, solver: isSolverCard(card), collision: isSolverCard(card) && collisionNear(grid, r, c) };
+      }
+    }
+    const rowOut = [];
+    for (let r = 0; r < R; r++) rowOut.push(streams[r][C - 1] || null);
+    const ramPeak = Math.max(0, ...colRam);
+    // overall polish relic
+    if (relics.has('confidence')) rowOut.forEach(s => { if (s) s.polish += 1; });
+    if (o.studioTest && relics.has('website')) rowOut.forEach(s => { if (s) s.polish += 2; });
+    let best = null;
+    if (o.brief) {
+      for (let r = 0; r < R; r++) {
+        const g = gradeShot(o.brief, rowOut[r], relics);
+        g.row = r;
+        if (!best || (g.pass && !best.pass) || (g.pass === best.pass && g.score > best.score)) best = g;
+      }
+    }
+    return { cells, streams, sigs, rowOut, hours, colRam, ramPeak, best, R, C };
+  }
+
+  /* ================================================================
+   * 7. briefs, grading, notes
+   * ================================================================ */
+  function gradeShot(brief, s, relics) {
+    const out = { pass: false, missing: [], stars: 0, polish: 0, pts: 0, score: -999, grade: 'F', el: brief.hero, dead: false };
+    if (!s) { out.missing = ['nostream']; return out; }
+    if (s.dead) { out.dead = true; out.missing = ['dead']; return out; }
+    out.stars = streamStars(s, relics, brief.hero);
+    out.polish = Math.max(0, s.polish);
+    const reqs = brief.reqs.concat(brief.revealed || []);
+    for (const q of reqs) { if (!REQS[q.id].test(s, q.n)) out.missing.push(q.id); }
+    const heroOk = out.stars >= brief.minStars;
+    if (!heroOk) out.missing.unshift('hero');
+    out.pass = out.missing.length === 0;
+    out.pts = Math.max(0, (out.stars - brief.minStars) * 2 + out.polish);
+    out.score = (out.pass ? 1000 : 0) + out.stars * 10 + out.polish - out.missing.length * 30;
+    if (!out.pass) out.grade = 'F';
+    else if (out.pts >= CONFIG.gradePts.S) out.grade = 'S';
+    else if (out.pts >= CONFIG.gradePts.A) out.grade = 'A';
+    else if (out.pts >= CONFIG.gradePts.B) out.grade = 'B';
+    else out.grade = 'C';
+    return out;
+  }
+
+  const CLIENTS = STORY.CLIENTS;
+  const STUDIOS = STORY.STUDIOS;
+
+  function notesFor(brief, g, dailyIdx, rng) {
+    // returns { lines:[{who, text(loc)}], changes:{...} }
+    const client = brief.client ? CLIENTS[brief.client] : null;
+    const studio = brief.studio ? STUDIOS[brief.studio] : null;
+    const persona = client ? client.persona : (studio ? studio.persona : 'mentor');
+    const lines = [];
+    const changes = {};
+    const NL = STORY.NOTE_LINES;
+    if (g.dead) lines.push(pick(rng, NL.dead));
+    else if (g.missing.includes('nostream')) lines.push(pick(rng, NL.nothing));
+    else {
+      for (const m of g.missing) {
+        if (m === 'hero') lines.push(fmtLine(pick(rng, NL.weakHero), { el: ELEMENTS[brief.hero].name, n: brief.minStars }));
+        else if (REQS[m]) {
+          const rq = (brief.reqs.concat(brief.revealed || [])).find(x => x.id === m) || { id: m };
+          lines.push(fmtLine(pick(rng, NL.missing), { req: reqLoc(rq) }));
         }
       }
+    }
+    // persona twists (only once each)
+    if (dailyIdx === 0 && !brief.twisted) {
+      if (persona === 'bigger') {
+        brief.minStars = Math.min(5, brief.minStars + 1); brief.twisted = true;
+        lines.push(fmtLine(pick(rng, NL.bigger), { n: brief.minStars }));
+        changes.minStars = brief.minStars;
+      } else if (persona === 'secret' && brief.hidden && !brief.revealed.length) {
+        brief.revealed.push(brief.hidden); brief.twisted = true;
+        lines.push(fmtLine(pick(rng, NL.secret), { req: reqLoc(brief.hidden) }));
+        changes.revealed = brief.hidden;
+      } else if (persona === 'flipper') {
+        const others = ELEMENT_IDS.filter(e => e !== brief.hero);
+        const nh = brief.flipTo || pick(rng, others);
+        changes.heroFrom = brief.hero;
+        brief.hero = nh; brief.twisted = true;
+        brief.minStars = Math.max(1, brief.minStars - 0.5);
+        lines.push(fmtLine(pick(rng, NL.flip), { el: ELEMENTS[nh].name }));
+        changes.hero = nh;
+      } else if (persona === 'auteur') {
+        const pr = brief.reqs.find(q => q.id === 'polish');
+        if (pr) { pr.n += 1; } else brief.reqs.push({ id: 'polish', n: 3 });
+        brief.twisted = true;
+        lines.push(pick(rng, NL.auteur));
+        changes.polish = true;
+      }
+    }
+    if (g.pass && !lines.length) {
+      if (g.grade === 'S') lines.push(pick(rng, NL.love));
+      else lines.push(pick(rng, NL.ok));
+    }
+    if (!lines.length) lines.push(pick(rng, NL.ok));
+    return { persona, lines, changes };
+  }
+  function reqLoc(rq) {
+    const d = REQS[rq.id];
+    return { en: d.name.en.replace('{n}', rq.n), zh: d.name.zh.replace('{n}', rq.n) };
+  }
+  function fmtLine(line, vars) {
+    const out = {};
+    for (const l of LANGS) {
+      out[l] = line[l].replace(/\{(\w+)\}/g, (m, k) => vars[k] == null ? m : (typeof vars[k] === 'object' ? vars[k][l] : String(vars[k])));
     }
     return out;
   }
 
-  function cardDef(card) { return NODE_DEFS[card.type]; }
-  function cardSubstep(card) { return clamp(Number(card.substep) || 1, 1, 4); }
-  function isUpgraded(card) { return !!(card && card.upgraded); }
-
-  function toSet(v) {
-    if (v instanceof Set) return v;
-    if (Array.isArray(v)) return new Set(v);
-    return new Set();
-  }
-
-  function explosionChance(substep, fxBond) {
-    const base = [0, 15, 35, 60][clamp(substep, 1, 4) - 1];
-    return Math.max(0, base - (fxBond ? CONFIG.fxBondExplosionReduction * 100 : 0));
-  }
-
-  function getRule(ruleId) { return RULES[ruleId] || RULES.none; }
-
   /* ================================================================
-   * 5. 关卡生成
+   * 8. job / board generation
    * ================================================================ */
-  function chooseWeighted(rng, items) {
-    const total = sum(items.map(function (x) { return x.w; }));
-    let roll = rng() * total;
-    for (const it of items) {
-      roll -= it.w;
-      if (roll <= 0) return it.v;
-    }
-    return items[items.length - 1].v;
-  }
-
-  function generateLevels(rng) {
-    rng = createRng(rng);
-    const levels = [];
-    const rulePool = Object.keys(RULES).filter(function (id) { return id !== 'none'; });
-    const hardPool = rulePool.filter(function (id) { return RULES[id].hard; });
-
-    for (let i = 0; i < CONFIG.months * CONFIG.levelsPerMonth; i++) {
-      const slot = i % CONFIG.levelsPerMonth; // 0 零活 / 1 中型 / 2 Boss
-      const tier = slot === 0 ? 'side' : (slot === 1 ? 'mid' : 'boss');
-      const month = Math.floor(i / CONFIG.levelsPerMonth) + 1;
-
-      let ruleId;
-      if (tier === 'boss') {
-        ruleId = pick(rng, hardPool);
-      } else {
-        ruleId = chooseWeighted(rng, [
-          { v: 'none', w: 2.4 },
-          { v: 'fxhouse', w: 1 },
-          { v: 'adagency', w: 0.8 },
-          { v: 'lightingjob', w: 1 },
-          { v: 'generalist', w: 0.75 },
-          { v: 'specialist', w: 0.75 },
-          { v: 'renderfarm', w: 0.9 },
-          { v: 'clientchange', w: 0.75 },
-          { v: 'outsource', w: 1 }
-        ]);
-      }
-      const rule = getRule(ruleId);
-
-      let targetOutput;
-      if (rule.targetOutput) {
-        targetOutput = rule.targetOutput;
-      } else if (tier === 'boss') {
-        targetOutput = chooseWeighted(rng, [
-          { v: 'sim', w: 0.1 }, { v: 'render', w: 0.25 }, { v: 'final', w: 0.65 }
-        ]);
-      } else if (tier === 'mid') {
-        targetOutput = chooseWeighted(rng, [
-          { v: 'sim', w: 0.2 }, { v: 'render', w: 0.3 }, { v: 'final', w: 0.5 }
-        ]);
-      } else {
-        targetOutput = chooseWeighted(rng, [
-          { v: 'sim', w: 0.34 }, { v: 'render', w: 0.33 }, { v: 'final', w: 0.33 }
-        ]);
-      }
-
-      let targetScore = Math.round(CONFIG.targetBase * Math.pow(CONFIG.targetGrowth, i));
-      if (tier === 'boss') targetScore = Math.round(targetScore * CONFIG.bossTargetMultiplier);
-      if (ruleId === 'outsource') targetScore = Math.round(targetScore * CONFIG.outsourceTargetMultiplier);
-
-      const budget = randInt(rng, CONFIG.budgetMin, CONFIG.budgetMax);
-      let rewardMoney = CONFIG.rewards[tier];
-      if (ruleId === 'outsource') rewardMoney = Math.floor(rewardMoney * CONFIG.outsourceRewardMultiplier);
-
-      const companyName = pick(rng, COMPANY_NAMES[tier]);
-      levels.push({
-        index: i,
-        month: month,
-        slot: slot + 1,
-        tier: tier,
-        companyName: companyName,
-        companySlogan: tier === 'boss'
-          ? loc('Dream Studio · Final Interview', '梦想公司 · 最终面试')
-          : (tier === 'mid' ? loc('Mid-size Studio', '中型工作室') : loc('Freelance Gig', '零活')),
-        ruleId: ruleId,
-        ruleName: rule.name,
-        ruleDesc: rule.desc,
-        targetOutput: targetOutput,
-        targetScore: targetScore,
-        baseBudget: budget,
-        rewardMoney: rewardMoney,
-        relicReward: tier === 'mid',
-        clear: false,
-        failed: false
-      });
-    }
-    return levels;
-  }
-
-  /* ================================================================
-   * 6. 计分 / 预览核心
-   * ================================================================ */
-  function evaluate(inputGrid, options) {
-    options = options || {};
-    const level = options.level || {};
-    const ruleId = options.ruleId || level.ruleId || 'none';
-    const rule = getRule(ruleId);
-    const relics = toSet(options.relics || level.relics);
-    const targetOutput = options.targetOutput || level.targetOutput || 'final';
-    const targetScore = options.targetScore == null
-      ? (level.targetScore == null ? 0 : level.targetScore)
-      : options.targetScore;
-
-    let budget = options.budget == null
-      ? (level.budget == null ? (level.baseBudget == null ? 99 : level.baseBudget) : level.budget)
-      : options.budget;
-    if (ruleId === 'renderfarm') budget -= CONFIG.renderFarmBudgetPenalty;
-    if (relics.has('caffeine')) budget += CONFIG.caffeineBudgetBonus;
-
-    const roll = !!options.roll;
-    const rng = typeof options.rng === 'function' ? options.rng : Math.random;
-    const grid = normalizeGrid(inputGrid);
-
-    const cells = [[], [], []];
-    const placed = [];
-    const deptPlaced = { model: 0, fx: 0, lighting: 0, comp: 0 };
-
-    for (let r = 0; r < 3; r++) {
-      for (let c = 0; c < 6; c++) {
-        const card = grid[r][c];
-        if (!card) { cells[r][c] = null; continue; }
-        const def = cardDef(card);
-        if (!def) throw new Error('Unknown node: ' + card.type);
-        const cell = {
-          row: r, col: c, card: card, def: def, type: card.type,
-          dept: def.dept, passThrough: false, active: false,
-          outputType: def.output, inputs: [], lineage: new Set(),
-          hours: 0, value: 0, rawOutput: 0, supplied: false,
-          inputValue: 0, exploded: false, rescued: false,
-          explosionChance: 0, auraMultiplier: 1, upgraded: isUpgraded(card),
-          vexed: !!card.vexed, substep: cardSubstep(card),
-          _structural: true
-        };
-        cells[r][c] = cell;
-        placed.push(cell);
-        if (deptPlaced[def.dept] != null) deptPlaced[def.dept] += 1;
-      }
-    }
-
-    /* --- 5.1 只招专才：决定主导部门与直通节点 --- */
-    let specialistDept = null;
-    if (ruleId === 'specialist') {
-      let best = -1;
-      ['fx', 'lighting', 'comp'].forEach(function (d) {
-        if (deptPlaced[d] > best) { best = deptPlaced[d]; specialistDept = d; }
-      });
-    }
-    for (const cell of placed) {
-      cell.passThrough = ruleId === 'specialist' &&
-        cell.dept !== 'model' && cell.dept !== 'merge' &&
-        cell.dept !== specialistDept;
-    }
-
-    /* 空格子当直通线：左邻 = 同行左边最近的节点；输出口取每行最右边的节点 */
-    function leftOf(r, c) { for (let k = c - 1; k >= 0; k--) { if (cells[r][k]) return cells[r][k]; } return null; }
-    function rightmost(r) { for (let k = 5; k >= 0; k--) { if (cells[r][k]) return cells[r][k]; } return null; }
-
-    /* --- 5.2 结构连通性（决定哪些节点算“有效参与”并触发羁绊） --- */
-    const connections = [];
-    let usdUsed = false;
-    const usdAvailable = relics.has('usd');
-
-    for (let c = 0; c < 6; c++) {
-      for (let r = 0; r < 3; r++) {
-        const cell = cells[r][c];
-        if (!cell) continue;
-        const def = cell.def;
-        if (def.source || (def.dept === 'model' && !def.input.length)) {
-          cell.active = true;
-          cell.outputType = def.output;
-          cell.lineage = new Set([def.dept]);
-          continue;
-        }
-
-        if (def.special === 'merge') {
-          const inputRows = [r - 1, r, r + 1].filter(function (x) { return x >= 0 && x < 3; });
-          const inputTypes = [];
-          const lineage = new Set();
-          let any = false;
-          for (const rr of inputRows) {
-            const src = leftOf(rr, c);
-            if (!src) continue;
-            const conn = {
-              mode: 'merge',
-              from: { row: rr, col: src.col },
-              to: { row: r, col: c },
-              fromType: src.outputType,
-              accepted: true,
-              mismatch: false,
-              connected: !!src.active,
-              usdRescue: false,
-              sourceActive: !!src.active
-            };
-            connections.push(conn);
-            if (src.active) {
-              any = true;
-              inputTypes.push(src.outputType);
-              cell.inputs.push({ row: rr, col: src.col, type: src.outputType });
-              src.lineage.forEach(function (d) { lineage.add(d); });
-            }
-          }
-          cell.active = any;
-          if (any) {
-            cell.outputType = inputTypes.reduce(function (best, t) {
-              return PORTS[t].rank > PORTS[best].rank ? t : best;
-            }, inputTypes[0]);
-            lineage.add('merge');
-            cell.lineage = lineage;
-          } else {
-            cell.lineage = new Set();
-          }
-          continue;
-        }
-
-        const src = leftOf(r, c);
-        if (!src) continue;
-        const accepted = def.input.indexOf(src.outputType) !== -1;
-        let connected = accepted && src.active;
-        let usdRescue = false;
-        if (!accepted && src.active && usdAvailable && !usdUsed) {
-          usdUsed = true;
-          connected = true;
-          usdRescue = true;
-        }
-        const conn = {
-          mode: cell.passThrough ? 'passthrough' : 'normal',
-          from: { row: r, col: src.col },
-          to: { row: r, col: c },
-          fromType: src.outputType,
-          accepted: accepted,
-          mismatch: !accepted,
-          connected: connected,
-          usdRescue: usdRescue,
-          sourceActive: !!src.active
-        };
-        connections.push(conn);
-        cell._primary = conn;
-        if (connected) {
-          cell.active = true;
-          cell.inputs.push({ row: r, col: src.col, type: src.outputType });
-          if (cell.passThrough) {
-            // 只招专才：其他部门保留自己的端口类型，但数值直通 ×1、不计特殊效果。
-            cell.outputType = def.output;
-            cell.lineage = new Set(src.lineage);
-            cell.lineage.add(cell.dept);
-          } else {
-            cell.outputType = def.output;
-            cell.lineage = new Set(src.lineage);
-            if (cell.dept !== 'merge') cell.lineage.add(cell.dept);
-          }
-        } else {
-          cell.outputType = def.output;
-          cell.lineage = new Set([cell.dept]);
-        }
-      }
-    }
-
-    /* --- 5.3 羁绊 --- */
-    const bonds = { model: 0, fx: 0, lighting: 0, comp: 0 };
-    for (const cell of placed) {
-      if (cell.active && bonds[cell.dept] != null) bonds[cell.dept] += 1;
-    }
-    const bondActive = {
-      model: bonds.model >= 3,
-      fx: bonds.fx >= 3,
-      lighting: bonds.lighting >= 3,
-      comp: bonds.comp >= 3
-    };
-
-    /* --- 5.4 耗时 --- */
-    let totalHours = 0;
-    for (const cell of placed) {
-      const def = cell.def;
-      let h = def.hours;
-      if (cell.passThrough) {
-        h = 0;
-      } else if (def.dept === 'fx') {
-        h += (cell.substep - 1) * CONFIG.substepHours;
-        if (relics.has('houdini')) h = Math.max(1, h - 1);
-      } else if (def.dept === 'comp') {
-        if (relics.has('nuke') || bondActive.comp) h = 0;
-      } else if (cell.type === 'render') {
-        let reductions = 0;
-        for (let rr = 0; rr < 3; rr++) {
-          if (rr === cell.row) continue;
-          const other = cells[rr][cell.col];
-          if (other && other.type === 'lightlink' && other.active && !other.passThrough) {
-            reductions += def.renderHoursReduction || 2;
-          }
-        }
-        h = Math.max(0, h - reductions);
-      }
-      h = Math.max(0, h);
-      cell.hours = h;
-      totalHours += h;
-    }
-
-    /* --- 5.5 逐列算数值 --- */
-    const rowExplosion = [null, null, null];
-    const explosions = [];
-    const auraSourcesByCol = [[], [], [], [], [], []];
-
-    function addUpstreamLineage(cell, inputs) {
-      const out = new Set();
-      inputs.forEach(function (src) {
-        if (src && src.runtimeLineage) src.runtimeLineage.forEach(function (d) { out.add(d); });
-      });
-      if (cell.dept !== 'merge') out.add(cell.dept);
-      return out;
-    }
-
-    for (let c = 0; c < 6; c++) {
-      for (let r = 0; r < 3; r++) {
-        const cell = cells[r][c];
-        if (!cell) continue;
-        if (!cell.active) {
-          cell.supplied = false;
-          cell.value = 0;
-          cell.rawOutput = 0;
-          cell.runtimeLineage = new Set(cell.lineage || []);
-          continue;
-        }
-
-        const def = cell.def;
-        const connectedInputs = [];
-        let inputValue = 0;
-        let supplied = false;
-
-        if (def.source) {
-          supplied = true;
-          cell.runtimeLineage = new Set([cell.dept]);
-        } else if (def.special === 'merge') {
-          const rows = [r - 1, r, r + 1].filter(function (x) { return x >= 0 && x < 3; });
-          for (const rr of rows) {
-            const src = leftOf(rr, c);
-            if (src && src.supplied) {
-              connectedInputs.push(src);
-              inputValue += src.value;
-            }
-          }
-          supplied = connectedInputs.length > 0;
-          cell.runtimeLineage = supplied ? addUpstreamLineage(cell, connectedInputs) : new Set();
-        } else {
-          const conn = cell._primary;
-          const src = leftOf(r, c);
-          if (conn && conn.connected && src && src.supplied) {
-            connectedInputs.push(src);
-            inputValue = src.value;
-            supplied = true;
-          }
-          if (!supplied && cell.type === 'roto' && rowExplosion[r]) {
-            const boom = rowExplosion[r];
-            inputValue = boom.preValue * def.rescuePercent;
-            supplied = true;
-            cell.rescued = true;
-            cell.rescueFrom = { row: boom.row, col: boom.col, preValue: boom.preValue };
-            cell.runtimeLineage = new Set(cell.lineage || []);
-          }
-          if (supplied) {
-            cell.runtimeLineage = addUpstreamLineage(cell, connectedInputs);
-          } else {
-            cell.runtimeLineage = new Set();
-          }
-        }
-
-        cell.inputValue = inputValue;
-        if (!supplied) {
-          cell.supplied = false;
-          cell.rawOutput = 0;
-          cell.value = 0;
-          continue;
-        }
-
-        let out = 0;
-        const type = cell.type;
-
-        if (cell.passThrough) {
-          out = inputValue;
-        } else if (def.source || cell.dept === 'model') {
-          if (type === 'box' || type === 'sculpt' || type === 'scan') {
-            out = def.base;
-            if (bondActive.model) out += CONFIG.modelBondBonus;
-            if (type === 'scan') {
-              const hasAdjLight = [r - 1, r + 1].some(function (rr) {
-                if (rr < 0 || rr > 2) return false;
-                const n = cells[rr][c];
-                return n && n.dept === 'lighting' && n.active;
-              });
-              if (hasAdjLight) out *= def.adjacentLightingMultiplier;
-            }
-          } else if (type === 'kitbash') {
-            let others = 0;
-            for (let rr = 0; rr < 3; rr++) {
-              if (rr === r) continue;
-              const n = cells[rr][c];
-              if (n && n.dept === 'model') others += 1;
-            }
-            out = def.base + others * def.perOtherModel;
-            if (bondActive.model) out += CONFIG.modelBondBonus;
-          }
-        } else if (def.special === 'merge') {
-          const depts = new Set();
-          connectedInputs.forEach(function (src) {
-            src.runtimeLineage.forEach(function (d) {
-              if (DEPARTMENTS[d]) depts.add(d);
-            });
-          });
-          out = inputValue * (1 + CONFIG.mergeDeptBonus * depts.size);
-        } else if (cell.dept === 'fx') {
-          if (def.rbdPerModel != null) {
-            let models = 0;
-            for (let cc = 0; cc < c; cc++) {
-              const n = cells[r][cc];
-              if (n && n.dept === 'model') models += 1;
-            }
-            out = inputValue * (1 + def.rbdPerModel * models);
-          } else if (def.flat != null) {
-            out = inputValue + def.flat;
-          } else {
-            out = inputValue * def.mult;
-          }
-          out *= Math.pow(def.substepMult, cell.substep - 1);
-          if (ruleId === 'fxhouse') out *= 1.5;
-        } else if (cell.dept === 'lighting') {
-          out = inputValue * def.mult;
-          if (type === 'hdri') {
-            const otherLighting = [r - 1, r + 1].some(function (rr) {
-              if (rr < 0 || rr > 2) return false;
-              const n = cells[rr][c];
-              return n && n.dept === 'lighting' && n !== cell && n.active;
-            });
-            if (otherLighting) out *= def.sameColumnLightingMult;
-          }
-        } else if (cell.dept === 'comp') {
-          if (type === 'grade') {
-            let upstreamCount = 0;
-            for (let cc = 0; cc < c; cc++) {
-              if (cells[r][cc]) upstreamCount += 1;
-            }
-            out = inputValue * (1 + def.gradePerUpstream * upstreamCount);
-          } else if (type === 'roto') {
-            out = inputValue + def.flat;
-          } else if (type === 'keygreen') {
-            out = inputValue + def.flat;
-          } else if (type === 'despill') {
-            let adjacentComp = 0;
-            const neigh = [[r - 1, c], [r + 1, c], [r, c - 1], [r, c + 1]];
-            neigh.forEach(function (p) {
-              if (p[0] < 0 || p[0] > 2 || p[1] < 0 || p[1] > 5) return;
-              const n = cells[p[0]][p[1]];
-              if (n && n.dept === 'comp' && n !== cell) adjacentComp += 1;
-            });
-            out = inputValue * def.mult + adjacentComp * def.adjacentCompBonus;
-          }
-        }
-
-        if (!cell.passThrough) {
-          if (cell.upgraded) out *= CONFIG.upgradeMultiplier;
-          if (cell.vexed) out *= 2;
-        }
-        cell.rawOutput = out;
-
-        if (cell.dept === 'fx' && !def.neverExplodes && !cell.passThrough) {
-          cell.explosionChance = explosionChance(cell.substep, bondActive.fx);
-          if (roll && cell.explosionChance > 0 && rng() * 100 < cell.explosionChance) {
-            cell.exploded = true;
-            cell.preExplosionValue = out;
-            rowExplosion[r] = {
-              row: r, col: c, preValue: out, type: cell.type
-            };
-            explosions.push({
-              row: r, col: c, preValue: out,
-              chance: cell.explosionChance, type: cell.type
-            });
-            if (relics.has('cache')) {
-              out = out * 0.5;
-            } else {
-              out = 0;
-            }
-          }
-        }
-
-        cell.value = out;
-        cell.supplied = !cell.exploded || (relics.has('cache') && out > 0);
-
-        if (cell.supplied && cell.value > 0 && (type === 'keylight' || type === 'lightlink') && !cell.passThrough) {
-          auraSourcesByCol[c].push(cell);
-        }
-      }
-
-      /* --- 本列光环结算（同一列结算完后应用） --- */
-      const colAuraSources = auraSourcesByCol[c];
-      if (colAuraSources.length) {
-        for (let r = 0; r < 3; r++) {
-          const target = cells[r][c];
-          if (!target || !target.supplied || target.dept === 'lighting' || target.passThrough) continue;
-          for (const src of colAuraSources) {
-            if (Math.abs(src.row - target.row) !== 1) continue;
-            let factor = src.def.aura || 1;
-            if (bondActive.lighting) {
-              factor = src.def.auraKind === 'link' ? CONFIG.lightingLinkBondAura : CONFIG.lightingBondAura;
-            }
-            if (ruleId === 'lightingjob') factor *= 2;
-            target.value *= factor;
-            target.auraMultiplier *= factor;
-          }
-        }
-      }
-    }
-
-    /* --- 5.6 输出口与计分 --- */
-    const rowResults = [];
-    let rawTotal = 0;
-    let scoreCount = 0;
-    for (let r = 0; r < 3; r++) {
-      const cell = rightmost(r);
-      let score = 0;
-      let targetMatch = false;
-      let halved = false;
-      let chainDepts = [];
-      if (cell && cell.supplied && cell.value > 0 && cell.outputType === targetOutput) {
-        score = cell.value;
-        targetMatch = true;
-        chainDepts = Array.from(cell.runtimeLineage || []).filter(function (d) { return !!DEPARTMENTS[d] && d !== 'merge'; });
-        if (ruleId === 'generalist' && new Set(chainDepts).size < 3) {
-          score *= 0.5;
-          halved = true;
-        }
-        if (score > 0) scoreCount += 1;
-      } else if (cell) {
-        chainDepts = Array.from(cell.runtimeLineage || []).filter(function (d) { return !!DEPARTMENTS[d] && d !== 'merge'; });
-      }
-      rawTotal += score;
-      rowResults.push({
-        row: r,
-        hasNode: !!cell,
-        outputType: cell ? cell.outputType : null,
-        value: cell ? cell.value : 0,
-        supplied: !!(cell && cell.supplied),
-        targetMatch: targetMatch,
-        chainDepts: chainDepts,
-        generalistHalved: halved,
-        score: score
-      });
-    }
-
-    const displayTotal = Math.round(rawTotal);
-    const overBudget = totalHours > budget + 1e-9;
-    const success = displayTotal >= targetScore;
-
-    /* --- 输出口连线 --- */
-    const outputConnections = [];
-    for (let r = 0; r < 3; r++) {
-      const cell = rightmost(r);
-      if (!cell) continue;
-      outputConnections.push({
-        row: r,
-        from: { row: r, col: cell.col },
-        fromType: cell.outputType,
-        targetOutput: targetOutput,
-        connected: !!cell.supplied,
-        typeMatch: cell.outputType === targetOutput
-      });
-    }
-
+  const REQ_POOL = ['tex', 'lit', 'final', 'night', 'grain', 'smoke', 'env', 'plate', 'stylized'];
+  function genGig(rng, week, clientId, bg) {
+    const cl = CLIENTS[clientId];
+    const hero = (cl.heroes && rng() < 0.7) ? pick(rng, cl.heroes) : pick(rng, ELEMENT_IDS);
+    const minStars = clamp(round1(1 + week * 0.24 + (rng() < 0.3 ? 0.5 : 0)), 1, 4.5);
+    const reqs = [{ id: 'lit' }];
+    if (week >= 2) reqs.push({ id: 'tex' });
+    if (week >= 3) reqs.push({ id: 'final' });
+    const extraN = week <= 2 ? 0 : (week <= 6 ? 1 : 2);
+    const pool = shuffle(rng, (cl.reqs || REQ_POOL).filter(x => !reqs.some(q => q.id === x)));
+    for (let i = 0; i < extraN && i < pool.length; i++) reqs.push({ id: pool[i] });
+    if (cl.persona === 'auteur') reqs.push({ id: 'polish', n: 2 + Math.floor(week / 4) });
+    else if (week >= 7 && rng() < 0.5) reqs.push({ id: 'polish', n: 2 });
+    const hidden = cl.persona === 'secret' ? { id: pick(rng, REQ_POOL.filter(x => !reqs.some(q => q.id === x) && x !== 'plate')) } : null;
+    let pay = Math.round((CONFIG.gigPay.base + CONFIG.gigPay.perWeek * week) * (cl.payMul || 1) * (0.9 + rng() * 0.25) / 10) * 10;
+    const hoursMod = cl.hoursMod || 0;
+    const nda = cl.nda === true ? true : (cl.nda === false ? false : rng() < 0.3);
+    const noun = pick(rng, ELEMENTS[hero].noun);
     return {
-      grid: grid,
-      cells: cells,
-      placed: placed,
-      connections: connections,
-      outputConnections: outputConnections,
-      rows: rowResults,
-      rowResults: rowResults,
-      bonds: bonds,
-      bondActive: bondActive,
-      specialistDept: specialistDept,
-      usdUsed: usdUsed,
-      targetOutput: targetOutput,
-      targetScore: targetScore,
-      ruleId: ruleId,
-      ruleName: rule.name,
-      budget: budget,
-      baseBudget: options.budget == null ? (level.baseBudget == null ? level.budget : level.baseBudget) : options.budget,
-      hours: totalHours,
-      totalHours: totalHours,
-      overBudget: overBudget,
-      canCook: !overBudget,
-      blockReason: overBudget ? 'err.overBudget' : null,
-      totalScore: rawTotal,
-      displayTotal: displayTotal,
-      scoreCount: scoreCount,
-      success: success,
-      explosions: explosions,
-      explosionCount: explosions.length,
-      rolled: roll,
-      relics: Array.from(relics),
-      hoursByCell: cells.map(function (row) { return row.map(function (c) { return c ? c.hours : null; }); }),
-      values: cells.map(function (row) { return row.map(function (c) { return c ? round2(c.value) : null; }); }),
-      types: cells.map(function (row) { return row.map(function (c) { return c ? c.outputType : null; }); })
+      kind: 'gig', client: clientId, hero, minStars, reqs, hidden, revealed: [], pay, nda, hoursMod,
+      title: noun, flipTo: cl.persona === 'flipper' ? pick(rng, ELEMENT_IDS.filter(e => e !== hero)) : null
     };
   }
-
-  function preview(grid, options) {
-    const opts = Object.assign({}, options || {}, { roll: false });
-    return evaluate(grid, opts);
+  function genTest(rng, studioId, week) {
+    const st = STUDIOS[studioId];
+    const hero = st.heroes ? pick(rng, st.heroes) : pick(rng, ELEMENT_IDS);
+    return {
+      kind: 'test', studio: studioId, hero: null, heroChoices: st.heroChoice ? ELEMENT_IDS.slice() : null,
+      minStars: st.minStars, reqs: st.reqs.map(q => Object.assign({}, q)), hidden: st.hidden ? Object.assign({}, st.hidden) : null,
+      revealed: [], pay: 0, nda: false, hoursMod: st.hoursMod || 0, title: st.shotName, defaultHero: hero
+    };
   }
-
-  function cookBoard(grid, options) {
-    const opts = Object.assign({}, options || {}, { roll: true });
-    return evaluate(grid, opts);
+  function genPortfolio() {
+    return { kind: 'portfolio', hero: null, heroChoices: ELEMENT_IDS.slice(), minStars: 1, reqs: [{ id: 'lit' }, { id: 'final' }], revealed: [], pay: 0, nda: false, hoursMod: 2, title: loc('Personal Shot', '个人作品') };
+  }
+  function reelGate(studioId) { return STUDIOS[studioId].gate; }
+  function checkGate(gate, reel) {
+    const eligible = reel.filter(s => !s.nda && !s.ng);
+    const res = { ok: true, lines: [] };
+    const good = eligible.filter(s => s.stars >= gate.stars);
+    const okCount = good.length >= gate.count;
+    res.lines.push({ ok: okCount, key: 'gate.count', vars: { n: gate.count, s: gate.stars, have: good.length } });
+    if (!okCount) res.ok = false;
+    if (gate.distinct) {
+      const d = new Set(good.map(s => s.el)).size;
+      const ok = d >= gate.distinct;
+      res.lines.push({ ok, key: 'gate.distinct', vars: { n: gate.distinct, have: d } });
+      if (!ok) res.ok = false;
+    }
+    if (gate.top) {
+      const ok = eligible.some(s => s.stars >= gate.top);
+      res.lines.push({ ok, key: 'gate.top', vars: { s: gate.top } });
+      if (!ok) res.ok = false;
+    }
+    return res;
   }
 
   /* ================================================================
-   * 7. 整局游戏状态机
+   * 9. sim (live solver)
+   * ================================================================ */
+  function simParams(card, opts) {
+    const S = CONFIG.solver;
+    const q = card.q || 1;
+    let inst = S.instBase * S.qInst[q];
+    let accel = S.instAccel * S.qInst[q];
+    if (opts.collision) { inst *= S.collisionMul; accel *= S.collisionMul; }
+    if (opts.guru) { inst *= S.guruMul; accel *= S.guruMul; }
+    if (opts.anim) { inst *= S.animMul; accel *= S.animMul; }
+    if (opts.tutorial) { inst *= 0.55; accel *= 0.55; }
+    const el = NODE_DEFS[cardParts(card).find(p => NODE_DEFS[p].solver)].hero.el;
+    return { detail: S.detailRate * S.qDetail[q], inst, accel, frames: S.frames, el };
+  }
+  function simInit(params, seed) {
+    return { f: 0, detail: 0, inst: 0, diverged: false, done: false, params, seed: seed >>> 0, history: [] };
+  }
+  function simStep(st, rng) {
+    if (st.done) return st;
+    const p = st.params;
+    st.f += 1;
+    st.detail += p.detail * (0.85 + rng() * 0.3);
+    let g = (p.inst + p.accel * st.f) * (0.55 + rng() * 0.9);
+    if (rng() < 0.06) g *= 2.6; // spike
+    st.inst += g;
+    st.history.push(Math.round(st.inst));
+    if (st.inst >= 100) { st.diverged = true; st.done = true; }
+    else if (st.f >= p.frames) st.done = true;
+    return st;
+  }
+  function simBonus(detail) {
+    const th = CONFIG.solver.thresholds;
+    let b = 0;
+    for (const x of th) if (detail >= x) b += 0.5;
+    return b;
+  }
+  function simPredict(params) {
+    // expected divergence frame (no noise) for the Wedge relic
+    let inst = 0;
+    for (let f = 1; f <= params.frames; f++) { inst += (params.inst + params.accel * f); if (inst >= 100) return f; }
+    return null;
+  }
+
+  /* ================================================================
+   * 10. Game
    * ================================================================ */
   class Game {
-    constructor(opts) {
-      opts = opts || {};
-      this.seed = opts.seed == null ? (Date.now() >>> 0) : opts.seed;
-      this.rng = createRng(opts.rng || this.seed);
-      this.newGame();
+    constructor(seed) {
+      this.seed = (seed == null ? Math.floor(Math.random() * 1e9) : seed) >>> 0;
+      this.rng = mulberry32(this.seed);
+      this.phase = 'title';
+      this.week = 0;
+      this.cash = CONFIG.startCash;
+      this.cards = [];
+      this.relics = [];
+      this.hw = { cols: CONFIG.startCols, rows: CONFIG.startRows, ram: CONFIG.startRam, cpuLvl: 0, gpuLvl: 0 };
+      this.reel = [];
+      this.flags = {};
+      this.history = [];
+      this.job = null;
+      this.board = null;
+      this.shop = null;
+      this.inbox = [];
+      this.bonusHoursNext = 0;
+      this.ending = null;
+      this.stats = { jobs: 0, sims: 0, diverged: 0, earned: 0, rentPaid: 0, best: 0 };
+      this.bg = null;
+      this.offers = [];
+    }
+    relicSet() { return new Set(this.relics); }
+    hasRelic(id) { return this.relics.includes(id); }
+    rentDue() { return CONFIG.rent + CONFIG.catFood + (this.hasRelic('caffeine') ? 25 : 0) + (this.flags.rentHike ? 60 : 0); }
+
+    start(bgId) {
+      const bg = BACKGROUNDS[bgId];
+      this.bg = bgId;
+      this.cards = BASICS.concat(bg.cards).map(t => makeCard(t));
+      this.relics = [bg.relic];
+      this.cash = CONFIG.startCash + (bg.cash || 0);
+      this.week = 1;
+      this.beginWeek();
+      return this;
     }
 
-    newGame() {
-      this.levels = generateLevels(this.rng);
-      this.state = {
-        money: CONFIG.startingMoney,
-        month: 1,
-        levelIndex: 0,
-        levels: this.levels,
-        deck: CONFIG.startingDeck.map(function (t) { return makeCard(t); }),
-        hand: [],
-        grid: emptyGrid(),
-        relics: [],
-        phase: 'playing',
-        status: 'playing',
-        cooksLeft: 0,
-        cooksTotal: 0,
-        attempts: 0,
-        lastCook: null,
-        lastLevelResult: null,
-        relicChoices: [],
-        shop: null,
-        vexUsed: false,
-        usdUsedThisLevel: false,
-        notice: '',
-        endedReason: null,
-        selectedHand: null
+    /* ---------- week flow ---------- */
+    beginWeek() {
+      this.phase = 'inbox';
+      this.inbox = STORY.inboxFor(this, this.rng);
+      this.board = this.makeBoard();
+    }
+    resolveEvent(msgIdx, choiceIdx) {
+      const m = this.inbox[msgIdx];
+      if (!m || !m.choices || m.resolved != null) return { ok: false };
+      const ch = m.choices[choiceIdx];
+      if (ch.cost && this.cash < ch.cost) return { ok: false, reason: 'err.cash' };
+      m.resolved = choiceIdx;
+      const out = ch.effect ? ch.effect(this) || {} : {};
+      m.result = out.text || ch.result || null;
+      this.log('event', m.id + ':' + choiceIdx);
+      return { ok: true, result: m.result };
+    }
+    inboxBlocking() { return this.inbox.some(m => m.choices && m.resolved == null); }
+    toBoard() { if (this.inboxBlocking()) return false; this.phase = 'board'; return true; }
+
+    makeBoard() {
+      const rng = mulberry32(this.seed ^ (this.week * 7919));
+      const pool = shuffle(rng, Object.keys(CLIENTS).filter(id => !CLIENTS[id].minWeek || CLIENTS[id].minWeek <= this.week));
+      const gigs = [];
+      const n = this.week === 1 ? 1 : 3;
+      for (let i = 0; i < n; i++) gigs.push(genGig(rng, this.week, this.week === 1 ? 'rumble' : pool[i % pool.length], this.bg));
+      // one gig always speaks to what you're good at
+      const fav = this.favoriteElement();
+      if (n > 1 && fav && !gigs.some(gg => gg.hero === fav)) {
+        const gi = Math.floor(rng() * n);
+        gigs[gi].hero = fav; gigs[gi].title = pick(rng, ELEMENTS[fav].noun);
+        if (gigs[gi].flipTo === fav) gigs[gi].flipTo = pick(rng, ELEMENT_IDS.filter(e => e !== fav));
+      }
+      if (this.week === 1) { gigs[0].minStars = 1; gigs[0].reqs = [{ id: 'lit' }]; gigs[0].hero = BACKGROUNDS[this.bg].el || 'destr'; gigs[0].tutorial = true; gigs[0].title = ELEMENTS[gigs[0].hero].noun[0]; gigs[0].pay = 520; gigs[0].nda = false; }
+      const board = { gigs, portfolio: this.week > 1 ? genPortfolio() : null, test: null };
+      const tw = CONFIG.testWeeks[this.week];
+      if (tw) {
+        board.test = genTest(rng, tw, this.week);
+        board.testGate = checkGate(reelGate(tw), this.reel);
+      }
+      return board;
+    }
+
+    favoriteElement() {
+      const score = {};
+      for (const c of this.cards) for (const p of cardParts(c)) { const h = NODE_DEFS[p].hero; if (h) score[h.el] = (score[h.el] || 0) + 1; }
+      for (const r of this.relics) { const rl = RELICS[r]; if (rl && rl.el) score[rl.el] = (score[rl.el] || 0) + 2; }
+      let best = null, bv = 0;
+      for (const e in score) if (score[e] > bv) { bv = score[e]; best = e; }
+      return best;
+    }
+    chooseJob(kind, idx, heroChoice) {
+      if (this.phase !== 'board') return { ok: false };
+      let brief;
+      if (kind === 'gig') brief = this.board.gigs[idx];
+      else if (kind === 'portfolio') brief = this.board.portfolio;
+      else if (kind === 'test') { if (!this.board.testGate.ok) return { ok: false, reason: 'err.gate' }; brief = this.board.test; }
+      if (!brief) return { ok: false };
+      brief = JSON.parse(JSON.stringify(brief));
+      if (brief.heroChoices) brief.hero = heroChoice || brief.defaultHero || brief.heroChoices[0];
+      if (!brief.hero) brief.hero = 'fire';
+      if (this.hasRelic('monitor') && brief.hidden) { brief.revealed.push(brief.hidden); brief.hiddenSeen = true; }
+      const hours = CONFIG.baseHours + (brief.hoursMod || 0) + this.bonusHoursNext + (this.hasRelic('caffeine') ? 3 : 0) + (this.flags.hoursPenalty || 0);
+      this.bonusHoursNext = 0;
+      this.flags.hoursPenalty = 0;
+      let dailies = CONFIG.dailies + (this.hasRelic('notebook') ? 1 : 0) + (brief.kind === 'test' && this.hasRelic('confidence') ? 1 : 0);
+      this.job = {
+        brief, grid: emptyGrid(this.hw.rows, this.hw.cols),
+        hoursTotal: hours, hoursLeft: hours, dailiesMax: dailies, dailiesUsed: 0,
+        farmBought: 0, last: null, notes: [], pipUsed: false, results: [], seedBase: Math.floor(this.rng() * 1e9)
       };
-      // 第一个月房租
-      this.state.money -= this.currentRent();
-      if (this.state.money < 0) {
-        this.kill('end.rentStart');
-        return;
-      }
-      this.startLevel();
-    }
-
-    get level() { return this.levels[this.state.levelIndex]; }
-
-    currentRent() {
-      return CONFIG.rent + (this.state.relics.indexOf('caffeine') !== -1 ? CONFIG.caffeineExtraRent : 0);
-    }
-
-    hasRelic(id) { return this.state.relics.indexOf(id) !== -1; }
-
-    cooksForLevel(level) {
-      let n = level.ruleId === 'clientchange' ? CONFIG.clientChangeCooks : CONFIG.baseCooks;
-      if (this.hasRelic('mentor')) n += CONFIG.mentorExtraCook;
-      return n;
-    }
-
-    startLevel() {
-      const s = this.state;
-      if (s.levelIndex >= this.levels.length) {
-        this.finishCampaign('miss');
-        return;
-      }
-      s.grid = emptyGrid();
-      s.hand = [];
-      s.vexUsed = false;
-      s.attempts = 0;
-      s.lastCook = null;
-      s.lastLevelResult = null;
-      s.relicChoices = [];
-      s.shop = null;
-      s.phase = 'playing';
-      s.status = 'playing';
-      s.selectedHand = null;
-      s.level = this.levels[s.levelIndex];
-      s.month = s.level.month;
-      s.cooksTotal = this.cooksForLevel(s.level);
-      s.cooksLeft = s.cooksTotal;
-      s.notice = '';
-      s.deck.forEach(function (c) { c.vexed = false; });
-      const shuffled = shuffle(s.deck, this.rng);
-      s.hand = shuffled.slice(0, Math.min(CONFIG.handSize, shuffled.length));
-      for (const c of s.hand) c.substep = clamp(c.substep || 1, 1, 4);
-    }
-
-    allCards() { return this.state.deck; }
-
-    cardByUid(uid) {
-      return this.state.deck.find(function (c) { return c.uid === uid; }) || null;
-    }
-
-    cardAt(row, col) {
-      const g = this.state.grid;
-      return g[row] && g[row][col] ? g[row][col] : null;
-    }
-
-    drawState() {
-      const s = this.state;
-      const seen = new Set();
-      s.hand.forEach(function (c) { seen.add(c.uid); });
-      for (let r = 0; r < 3; r++) {
-        for (let c = 0; c < 6; c++) {
-          if (s.grid[r][c]) seen.add(s.grid[r][c].uid);
-        }
-      }
-      return { hand: seen };
-    }
-
-    /* --- 放置 / 收回 / substep / VEX --- */
-    placeCard(uid, row, col) {
-      const s = this.state;
-      if (s.phase !== 'playing' || s.status !== 'playing') return { ok: false, reason: 'err.cannotPlace' };
-      if (row < 0 || row > 2 || col < 0 || col > 5) return { ok: false, reason: 'err.badCell' };
-      if (s.grid[row][col]) return { ok: false, reason: 'err.cellOccupied' };
-      const idx = s.hand.findIndex(function (c) { return c.uid === uid; });
-      if (idx === -1) return { ok: false, reason: 'err.cardNotInHand' };
-      const [card] = s.hand.splice(idx, 1);
-      s.grid[row][col] = card;
-      return { ok: true, card: card };
-    }
-
-    removeCard(row, col) {
-      const s = this.state;
-      if (s.phase !== 'playing' || s.status !== 'playing') return { ok: false, reason: 'err.cannotOperate' };
-      const card = s.grid[row] && s.grid[row][col];
-      if (!card) return { ok: false, reason: 'err.noNodeHere' };
-      s.grid[row][col] = null;
-      if (!s.hand.some(function (c) { return c.uid === card.uid; })) s.hand.push(card);
-      return { ok: true, card: card };
-    }
-
-    setSubstep(uid, valueOrDelta, isDelta) {
-      const card = this.cardByUid(uid);
-      if (!card) return { ok: false, reason: 'err.cardNotFound' };
-      const def = NODE_DEFS[card.type];
-      if (!def || def.dept !== 'fx') return { ok: false, reason: 'err.noSubstep' };
-      const before = cardSubstep(card);
-      let next = isDelta ? before + Number(valueOrDelta) : Number(valueOrDelta);
-      next = clamp(next, 1, 4);
-      card.substep = next;
-      return { ok: true, substep: next };
-    }
-
-    markVex(uid) {
-      const s = this.state;
-      if (!this.hasRelic('vex')) return { ok: false, reason: 'err.noVexRelic' };
-      if (s.phase !== 'playing') return { ok: false, reason: 'err.vexNotNow' };
-      if (s.vexUsed) return { ok: false, reason: 'err.vexUsed' };
-      const card = this.cardByUid(uid);
-      if (!card) return { ok: false, reason: 'err.cardNotFound' };
-      let placed = false;
-      for (let r = 0; r < 3; r++) for (let c = 0; c < 6; c++) {
-        if (s.grid[r][c] && s.grid[r][c].uid === uid) placed = true;
-      }
-      if (!placed) return { ok: false, reason: 'err.placeFirst' };
-      s.deck.forEach(function (c) { c.vexed = false; });
-      card.vexed = true;
-      s.vexUsed = true;
+      this.phase = 'work';
+      this.log('job', brief.kind + ':' + (brief.client || brief.studio || '') + ':' + brief.hero);
       return { ok: true };
     }
 
-    /* --- 预览 / Cook --- */
-    getPreview() {
-      const s = this.state;
-      const level = this.level;
-      if (!level) return null;
-      return evaluate(s.grid, {
-        ruleId: level.ruleId,
-        targetOutput: level.targetOutput,
-        targetScore: level.targetScore,
-        budget: level.baseBudget,
-        relics: s.relics,
-        roll: false
-      });
+    /* ---------- grid editing ---------- */
+    placedUids() {
+      const s = new Set();
+      if (!this.job) return s;
+      for (const row of this.job.grid) for (const c of row) if (c) s.add(c.uid);
+      return s;
     }
-
-    getBudget() {
-      let b = this.level ? this.level.baseBudget : 0;
-      if (this.level && this.level.ruleId === 'renderfarm') b -= CONFIG.renderFarmBudgetPenalty;
-      if (this.hasRelic('caffeine')) b += CONFIG.caffeineBudgetBonus;
-      return b;
-    }
-
-    canCook() {
-      const s = this.state;
-      if (s.phase !== 'playing' || s.status !== 'playing') return { ok: false, reason: 'err.levelOver' };
-      if (s.cooksLeft <= 0) return { ok: false, reason: 'err.noCooksLeft' };
-      const p = this.getPreview();
-      if (p.overBudget) return { ok: false, reason: 'err.overBudget' };
+    freeCards() { const used = this.placedUids(); return this.cards.filter(c => !used.has(c.uid)); }
+    place(uid, r, c) {
+      const j = this.job; if (!j) return { ok: false };
+      if (r < 0 || r >= j.grid.length || c < 0 || c >= j.grid[0].length) return { ok: false };
+      const card = this.cards.find(x => x.uid === uid);
+      if (!card) return { ok: false };
+      // move if already placed
+      for (const row of j.grid) for (let i = 0; i < row.length; i++) if (row[i] && row[i].uid === uid) row[i] = null;
+      j.grid[r][c] = card;
       return { ok: true };
     }
+    remove(r, c) { if (!this.job) return; this.job.grid[r][c] = null; }
+    resim(uid) { const card = this.cards.find(x => x.uid === uid); if (card) card.nonce = (card.nonce || 0) + 1; }
+    setQuality(uid, q) {
+      const card = this.cards.find(x => x.uid === uid);
+      if (!card || !cardHasQuality(card)) return false;
+      card.q = clamp(q, 1, 3); return true;
+    }
 
-    cook() {
-      const s = this.state;
-      const check = this.canCook();
-      if (!check.ok) return { ok: false, reason: check.reason };
-      const level = this.level;
-      const result = evaluate(s.grid, {
-        ruleId: level.ruleId,
-        targetOutput: level.targetOutput,
-        targetScore: level.targetScore,
-        budget: level.baseBudget,
-        relics: s.relics,
-        roll: true,
-        rng: this.rng
-      });
-      s.cooksLeft -= 1;
-      s.attempts += 1;
-      s.lastCook = result;
-      s.phase = 'cooking';
-
-      if (result.success) {
-        level.clear = true;
-        this.grantRewards(level);
-        s.phase = 'levelEnd';
-        s.lastLevelResult = {
-          success: true,
-          level: level,
-          score: result.displayTotal,
-          target: level.targetScore,
-          reward: level.rewardMoney,
-          portfolioBonus: this.hasRelic('portfolio') ? CONFIG.portfolioBonus : 0,
-          attempts: s.attempts
-        };
-        if (level.relicReward) {
-          s.relicChoices = this.makeRelicChoices(3);
-          s.lastLevelResult.relicChoices = s.relicChoices.slice();
+    preview() {
+      const j = this.job;
+      const relics = this.relicSet();
+      const base = { relics, brief: j.brief, studioTest: j.brief.kind === 'test' };
+      const ev0 = evaluate(j.grid, base);
+      const cached = {};
+      let cost = 0;
+      for (let r = 0; r < ev0.R; r++) for (let c = 0; c < ev0.C; c++) {
+        const card = j.grid[r][c]; if (!card) continue;
+        const key = r + ',' + c;
+        const isCached = !!(j.last && j.last.sigs[r] && j.last.sigs[r][c] === ev0.sigs[r][c] && j.last.okKeys[key]);
+        cached[key] = isCached;
+        if (!isCached) cost += cardHours(card, relics);
+      }
+      const solver = {}, fails = {};
+      if (j.last) {
+        for (const k in cached) if (cached[k]) {
+          if (j.last.solver[k]) solver[k] = j.last.solver[k];
+          if (j.last.fails[k]) fails[k] = true;
         }
-        return { ok: true, result: result, ended: true, success: true };
       }
+      const ev = evaluate(j.grid, Object.assign({}, base, { solverResults: solver, fails }));
+      ev.cached = cached;
+      ev.cost = cost;
+      ev.ramMax = this.hw.ram;
+      ev.oom = ev.ramPeak > this.hw.ram;
+      return ev;
+    }
+    reuseSolver(ev) {
+      const j = this.job; const out = {};
+      if (!j.last) return out;
+      for (const k in j.last.solver) out[k] = j.last.solver[k];
+      return out;
+    }
+    reuseFails() { return this.job.last ? Object.assign({}, this.job.last.fails) : {}; }
 
-      if (s.cooksLeft <= 0) {
-        level.failed = true;
-        s.phase = 'levelEnd';
-        s.lastLevelResult = {
-          success: false,
-          level: level,
-          score: result.displayTotal,
-          target: level.targetScore,
-          reward: 0,
-          portfolioBonus: 0,
-          attempts: s.attempts
-        };
-        return { ok: true, result: result, ended: true, success: false };
+    farmPrice() {
+      const p = CONFIG.farmBasePrice + CONFIG.farmPriceStep * this.job.farmBought;
+      return this.hasRelic('farm') ? Math.round(p / 2) : p;
+    }
+    rentFarm() {
+      const j = this.job;
+      if (j.farmBought >= CONFIG.farmMaxPerJob) return { ok: false, reason: 'err.farmMax' };
+      const p = this.farmPrice();
+      if (this.cash < p) return { ok: false, reason: 'err.cash' };
+      this.cash -= p; j.farmBought += 1; j.hoursLeft += CONFIG.farmHours; j.hoursTotal += CONFIG.farmHours;
+      this.log('farm', p);
+      return { ok: true, price: p };
+    }
+
+    /* Cook: step 1 — plan (which solvers need a live sim) */
+    prepareCook() {
+      const j = this.job;
+      if (!j) return { ok: false };
+      if (j.dailiesUsed >= j.dailiesMax) return { ok: false, reason: 'err.noDailies' };
+      const ev = this.preview();
+      if (ev.oom) return { ok: false, reason: 'err.oom' };
+      if (ev.cost > j.hoursLeft) return { ok: false, reason: 'err.hours' };
+      const placed = j.grid.some(row => row.some(Boolean));
+      if (!placed) return { ok: false, reason: 'err.empty' };
+      const sims = [];
+      for (let r = 0; r < ev.R; r++) for (let c = 0; c < ev.C; c++) {
+        const card = j.grid[r][c]; if (!card) continue;
+        const key = r + ',' + c;
+        const cell = ev.cells[r][c];
+        if (!isSolverCard(card) || ev.cached[key] || cell.status === 'err') continue;
+        // solver only sims if its upstream would be valid: check that check passes
+        const inStream = c > 0 ? ev.streams[r][c - 1] : null;
+        const params = simParams(card, { collision: collisionNear(j.grid, r, c), guru: this.hasRelic('guru'), anim: !!(inStream && inStream.anim), tutorial: !!j.brief.tutorial });
+        sims.push({ key, r, c, type: card.type, params, seed: (j.seedBase + j.dailiesUsed * 131 + r * 17 + c * 7) >>> 0, predict: this.hasRelic('wedge') ? simPredict(params) : null });
       }
-
-      s.phase = 'playing';
-      return { ok: true, result: result, ended: false, success: false };
+      return { ok: true, sims, cost: ev.cost, ev };
     }
 
-    grantRewards(level) {
-      const s = this.state;
-      s.money += level.rewardMoney;
-      if (this.hasRelic('portfolio')) s.money += CONFIG.portfolioBonus;
-    }
-
-    makeRelicChoices(n) {
-      const owned = new Set(this.state.relics);
-      const pool = RELIC_IDS.filter(function (id) { return !owned.has(id); });
-      return shuffle(pool, this.rng).slice(0, Math.max(0, n || 3));
-    }
-
-    continueAfterLevel() {
-      const s = this.state;
-      if (s.phase !== 'levelEnd') return { ok: false, reason: 'err.cannotContinue' };
-      const level = this.level;
-      if (level.index >= this.levels.length - 1) {
-        this.finishCampaign(level.clear ? 'victory' : 'miss');
-        return { ok: true, ended: true, victory: !!level.clear };
+    /* Cook: step 2 — commit with sim outcomes {key:{detail, diverged, f}} */
+    commitCook(outcomes) {
+      const j = this.job;
+      const plan = this.prepareCook();
+      if (!plan.ok) return plan;
+      outcomes = outcomes || {};
+      const ev0 = plan.ev;
+      const solver = this.reuseSolver();
+      const fails = {};
+      const rng = mulberry32(j.seedBase ^ (j.dailiesUsed + 1) * 2654435761);
+      const fresh = [];
+      for (const sim of plan.sims) {
+        let o = outcomes[sim.key];
+        if (!o) { // auto-run: cache at the safest good point (headless)
+          const st = simInit(sim.params, sim.seed);
+          const srng = mulberry32(sim.seed);
+          while (!st.done && st.detail < 60) simStep(st, srng);
+          o = { detail: st.detail, diverged: st.diverged, f: st.f };
+        }
+        solver[sim.key] = { bonus: o.diverged ? 0 : simBonus(o.detail), diverged: !!o.diverged, detail: o.detail, f: o.f };
+        this.stats.sims += 1; if (o.diverged) this.stats.diverged += 1;
       }
-      if (level.clear && level.relicReward && s.relicChoices.length) {
-        s.phase = 'relic';
-        return { ok: true, phase: 'relic' };
+      // drop solver entries for keys that no longer hold a solver
+      for (const k in solver) { const [r, c] = k.split(',').map(Number); const cd = j.grid[r] && j.grid[r][c]; if (!cd || !isSolverCard(cd)) delete solver[k]; }
+      // quality rolls
+      const prevFails = j.last ? j.last.fails : {};
+      for (let r = 0; r < ev0.R; r++) for (let c = 0; c < ev0.C; c++) {
+        const card = j.grid[r][c]; if (!card) continue;
+        const key = r + ',' + c;
+        if (ev0.cached[key]) { if (prevFails[key]) fails[key] = true; continue; }
+        const risk = cardRisk(card);
+        if (risk > 0 && rng() < risk) {
+          if (this.hasRelic('pip') && !j.pipUsed) { j.pipUsed = true; fresh.push({ key, pip: true }); continue; }
+          fails[key] = true; fresh.push({ key, dept: cardDept(card) });
+        }
       }
-      this.openShop();
-      return { ok: true, phase: 'shop' };
+      const ev = evaluate(j.grid, { relics: this.relicSet(), brief: j.brief, studioTest: j.brief.kind === 'test', solverResults: solver, fails });
+      // memory blow-up from model fails
+      let oomRow = null;
+      for (const f of fresh) {
+        if (f.dept === 'model') {
+          const [r, c] = f.key.split(',').map(Number);
+          if (ev.colRam[c] + 8 > this.hw.ram) { oomRow = r; }
+        }
+      }
+      if (oomRow != null) { ev.rowOut[oomRow] = null; ev.best = null; for (let r = 0; r < ev.R; r++) { const g = gradeShot(j.brief, ev.rowOut[r], this.relicSet()); g.row = r; if (!ev.best || g.score > ev.best.score) ev.best = g; } }
+      const okKeys = {};
+      for (let r = 0; r < ev.R; r++) for (let c = 0; c < ev.C; c++) if (ev.cells[r][c] && ev.cells[r][c].status === 'ok' && !ev.cells[r][c].empty && !(solver[r + ',' + c] && solver[r + ',' + c].diverged)) okKeys[r + ',' + c] = true;
+      j.hoursLeft -= plan.cost;
+      const g = ev.best;
+      const notes = notesFor(j.brief, g, j.dailiesUsed, rng);
+      j.dailiesUsed += 1;
+      j.last = { sigs: ev.sigs, okKeys, solver, fails, grade: g, stream: g && ev.rowOut[g.row], ev, fresh, oomRow, notes, cost: plan.cost, cachedCount: Object.values(ev0.cached).filter(Boolean).length };
+      // grade again after notes possibly changed the brief (twists apply to NEXT delivery)
+      j.last.gradeAfter = gradeShot(j.brief, j.last.stream, this.relicSet());
+      j.notes.push(notes);
+      j.results.push({ grade: g.grade, stars: g.stars, polish: g.polish });
+      return { ok: true, ev, grade: g, notes, fresh, oomRow, cost: plan.cost };
     }
 
-    chooseRelic(id) {
-      const s = this.state;
-      if (s.phase !== 'relic') return { ok: false, reason: 'err.notRelicPhase' };
-      if (s.relicChoices.indexOf(id) === -1) return { ok: false, reason: 'err.relicNotOffered' };
-      if (s.relics.indexOf(id) !== -1) return { ok: false, reason: 'err.relicOwned' };
-      s.relics.push(id);
-      s.relicChoices = [];
-      this.openShop();
-      return { ok: true, relic: RELICS[id] };
+    canDeliver() { return !!(this.job && this.job.last); }
+    abandon() {
+      const j = this.job; if (!j) return { ok: false };
+      j.last = { stream: null, sigs: [], okKeys: {}, solver: {}, fails: {} };
+      return this.deliver();
     }
-
-    openShop() {
-      const s = this.state;
-      const shop = {
-        nodes: [],
-        relic: null,
-        relicBought: false,
-        deleteUsed: false,
-        upgradeUsed: false
+    serialize() {
+      const o = {};
+      for (const k of ['seed', 'phase', 'week', 'cash', 'cards', 'relics', 'hw', 'reel', 'flags', 'history', 'job', 'board', 'shop', 'bonusHoursNext', 'ending', 'stats', 'bg', 'lastDelivery', 'lastRent']) o[k] = this[k];
+      if (o.job && o.job.last) { o.job = Object.assign({}, o.job, { last: Object.assign({}, o.job.last, { ev: null }) }); }
+      return JSON.stringify(o);
+    }
+    static restore(str) {
+      const o = JSON.parse(str);
+      const g = new Game(o.seed);
+      Object.assign(g, o);
+      g.rng = mulberry32((o.seed ^ (o.week * 7919) ^ (o.history.length * 31)) >>> 0);
+      g.inbox = [];
+      let max = 0;
+      for (const c of g.cards) { const n = parseInt(String(c.uid).slice(1), 10); if (n > max) max = n; }
+      if (UID <= max) UID = max + 1;
+      if (g.job) {
+        const byId = {}; g.cards.forEach(c => { byId[c.uid] = c; });
+        g.job.grid = g.job.grid.map(row => row.map(c => (c && byId[c.uid]) || null));
+      }
+      return g;
+    }
+    deliver() {
+      const j = this.job;
+      if (!j || !j.last) return { ok: false };
+      const g = gradeShot(j.brief, j.last.stream, this.relicSet());
+      const b = j.brief;
+      let pay = 0;
+      if (b.kind === 'gig') {
+        pay = g.pass ? Math.round(b.pay * CONFIG.gradeMult[g.grade] * (b.client && CLIENTS[b.client].persona === 'flipper' && b.twisted ? 1.3 : 1) / 10) * 10 : Math.round(b.pay * CONFIG.killFee / 10) * 10;
+      }
+      const s = j.last.stream;
+      const el = (s && !s.dead) ? (dominantElement(s, this.relicSet()) || b.hero) : b.hero;
+      const shot = {
+        week: this.week, kind: b.kind, el: b.hero, mainEl: el, stars: g.stars, grade: g.grade, nda: !!b.nda, ng: !g.pass,
+        title: b.title, client: b.client || null, studio: b.studio || null,
+        look: s ? snapshotLook(s, this.relicSet()) : null, seed: j.seedBase
       };
-      const types = NODE_TYPES.slice();
-      for (let i = 0; i < CONFIG.shop.nodeCount; i++) {
-        const type = pick(this.rng, types);
-        shop.nodes.push({
-          type: type,
-          price: randInt(this.rng, CONFIG.shop.nodeMin, CONFIG.shop.nodeMax),
-          bought: false
-        });
+      if (b.kind !== 'test' || g.pass) this.reel.push(shot);
+      if (this.hasRelic('website') && g.pass && !b.nda) pay += 60;
+      this.cash += pay;
+      this.stats.earned += pay;
+      this.stats.jobs += 1;
+      this.stats.best = Math.max(this.stats.best, g.stars);
+      const res = { ok: true, grade: g, pay, shot, kind: b.kind, pass: g.pass };
+      if (b.kind === 'test' && g.pass) {
+        if (b.studio === 'halcyon') { res.win = true; }
+        else { res.offer = b.studio; }
       }
-      const owned = new Set(s.relics);
-      const available = RELIC_IDS.filter(function (id) { return !owned.has(id); });
-      if (available.length) {
-        shop.relic = { id: pick(this.rng, available), price: CONFIG.shop.relicPrice };
+      this.lastDelivery = res;
+      this.phase = 'delivered';
+      this.log('deliver', b.kind + ':' + g.grade + ':' + pay);
+      return res;
+    }
+    acceptOffer(accept) {
+      const st = this.lastDelivery && this.lastDelivery.offer;
+      if (!st) return;
+      if (accept) { this.ending = { id: 'offer_' + st, studio: st }; this.phase = 'ending'; return; }
+      this.flags.declined = st;
+      if (!this.hasRelic('confidence')) this.relics.push('confidence');
+      this.lastDelivery.offer = null;
+    }
+    toWeekend() {
+      const d = this.lastDelivery;
+      if (d && d.win) { this.ending = { id: 'dream' }; this.phase = 'ending'; return; }
+      if (this.week >= CONFIG.weeks) { this.ending = { id: 'freelance' }; this.phase = 'ending'; return; }
+      this.job = null;
+      // pay rent
+      const rent = this.rentDue();
+      this.cash -= rent;
+      this.stats.rentPaid += rent;
+      this.lastRent = rent;
+      if (this.cash < 0) { this.ending = { id: 'evicted' }; this.phase = 'ending'; return; }
+      this.shop = this.makeShop();
+      this.phase = 'weekend';
+    }
+
+    /* ---------- shop ---------- */
+    makeShop() {
+      const rng = mulberry32(this.seed ^ (this.week * 104729));
+      const owned = new Set(this.cards.map(c => c.type));
+      const ids = shuffle(rng, NODE_IDS.filter(id => !['box', 'plate'].includes(id)));
+      // prefer unowned
+      ids.sort((a, b) => (owned.has(a) ? 1 : 0) - (owned.has(b) ? 1 : 0));
+      const courses = ids.slice(0, CONFIG.shop.courseCount + 1).map(id => ({ type: id, price: Math.round((CONFIG.shop.courseMin + rng() * (CONFIG.shop.courseMax - CONFIG.shop.courseMin)) / 5) * 5, sold: false }));
+      const relicPool = shuffle(rng, SHOP_RELICS.filter(r => !this.relics.includes(r)));
+      const relics = relicPool.slice(0, CONFIG.shop.relicCount).map(id => ({ id, price: Math.round((CONFIG.shop.relicMin + rng() * (CONFIG.shop.relicMax - CONFIG.shop.relicMin)) / 10) * 10, sold: false }));
+      return { courses, relics, practiceUsed: false, coffeeUsed: false, hdaUsed: false };
+    }
+    hwPrice(kind) {
+      if (kind === 'cpu') return this.hw.cols >= CONFIG.maxCols ? null : CONFIG.shop.cpu[this.hw.cols - CONFIG.startCols];
+      if (kind === 'gpu') return this.hw.rows >= CONFIG.maxRows ? null : CONFIG.shop.gpu[this.hw.rows - CONFIG.startRows];
+      if (kind === 'ram') return this.hw.ram >= CONFIG.maxRam ? null : CONFIG.shop.ram;
+      return null;
+    }
+    buy(kind, arg, arg2) {
+      const sh = this.shop;
+      if (this.phase !== 'weekend' || !sh) return { ok: false };
+      const pay = (p) => { if (p == null) return false; if (this.cash < p) return false; this.cash -= p; return true; };
+      if (kind === 'course') {
+        const it = sh.courses[arg]; if (!it || it.sold) return { ok: false };
+        if (!pay(it.price)) return { ok: false, reason: 'err.cash' };
+        it.sold = true; this.cards.push(makeCard(it.type)); return { ok: true };
       }
-      s.shop = shop;
-      s.phase = 'shop';
-    }
-
-    buyShopNode(index) {
-      const s = this.state;
-      if (s.phase !== 'shop' || !s.shop) return { ok: false, reason: 'err.notInShop' };
-      const item = s.shop.nodes[index];
-      if (!item || item.bought) return { ok: false, reason: 'err.alreadyBought' };
-      if (s.money < item.price) return { ok: false, reason: 'err.noMoney' };
-      s.money -= item.price;
-      item.bought = true;
-      const c = makeCard(item.type);
-      s.deck.push(c);
-      return { ok: true, card: c };
-    }
-
-    buyShopRelic() {
-      const s = this.state;
-      if (s.phase !== 'shop' || !s.shop) return { ok: false, reason: 'err.notInShop' };
-      const item = s.shop.relic;
-      if (!item) return { ok: false, reason: 'err.noRelicToBuy' };
-      if (s.shop.relicBought) return { ok: false, reason: 'err.alreadyBought' };
-      if (s.relics.indexOf(item.id) !== -1) return { ok: false, reason: 'err.alreadyOwn' };
-      if (s.money < item.price) return { ok: false, reason: 'err.noMoney' };
-      s.money -= item.price;
-      s.relics.push(item.id);
-      s.shop.relicBought = true;
-      return { ok: true, relic: RELICS[item.id] };
-    }
-
-    buyDelete(uid) {
-      const s = this.state;
-      if (s.phase !== 'shop' || !s.shop) return { ok: false, reason: 'err.notInShop' };
-      if (s.shop.deleteUsed) return { ok: false, reason: 'err.deleteUsed' };
-      if (s.deck.length <= 1) return { ok: false, reason: 'err.keepOneCard' };
-      const idx = s.deck.findIndex(function (c) { return c.uid === uid; });
-      if (idx === -1) return { ok: false, reason: 'err.cardNotFoundShort' };
-      if (s.money < CONFIG.shop.deletePrice) return { ok: false, reason: 'err.noMoney' };
-      s.money -= CONFIG.shop.deletePrice;
-      const removed = s.deck.splice(idx, 1)[0];
-      s.shop.deleteUsed = true;
-      return { ok: true, removed: removed };
-    }
-
-    buyUpgrade(uid) {
-      const s = this.state;
-      if (s.phase !== 'shop' || !s.shop) return { ok: false, reason: 'err.notInShop' };
-      if (s.shop.upgradeUsed) return { ok: false, reason: 'err.upgradeUsed' };
-      const card = this.cardByUid(uid);
-      if (!card) return { ok: false, reason: 'err.cardNotFoundShort' };
-      if (card.upgraded) return { ok: false, reason: 'err.alreadyUpgraded' };
-      if (s.money < CONFIG.shop.upgradePrice) return { ok: false, reason: 'err.noMoney' };
-      s.money -= CONFIG.shop.upgradePrice;
-      card.upgraded = true;
-      s.shop.upgradeUsed = true;
-      return { ok: true, card: card };
-    }
-
-    leaveShop() {
-      const s = this.state;
-      if (s.phase !== 'shop') return { ok: false, reason: 'err.notInShop' };
-      const nextIndex = s.levelIndex + 1;
-      if (nextIndex >= this.levels.length) {
-        this.finishCampaign('miss');
-        return { ok: true, ended: true };
+      if (kind === 'relic') {
+        const it = sh.relics[arg]; if (!it || it.sold) return { ok: false };
+        if (!pay(it.price)) return { ok: false, reason: 'err.cash' };
+        it.sold = true; this.relics.push(it.id); return { ok: true };
       }
-      s.shop = null;
-      s.levelIndex = nextIndex;
-      const nextLevel = this.levels[nextIndex];
-      if (nextLevel.month !== s.month) {
-        s.month = nextLevel.month;
-        s.money -= this.currentRent();
-        if (s.money < 0) {
-          this.kill('end.rentMonth');
-          return { ok: true, ended: true, dead: true };
-        }
+      if (kind === 'practice') {
+        if (sh.practiceUsed) return { ok: false };
+        const card = this.cards.find(c => c.uid === arg); if (!card) return { ok: false };
+        if (!pay(CONFIG.shop.practice)) return { ok: false, reason: 'err.cash' };
+        card.up = (card.up || 0) + 1; sh.practiceUsed = true; return { ok: true };
       }
-      this.startLevel();
-      return { ok: true, level: this.level };
-    }
-
-    finishCampaign(kind) {
-      const s = this.state;
-      if (kind === 'victory') {
-        s.status = 'victory';
-        s.phase = 'victory';
-      } else {
-        s.status = 'no_offer';
-        s.phase = 'no_offer';
+      if (kind === 'coffee') {
+        if (sh.coffeeUsed) return { ok: false };
+        if (!pay(CONFIG.shop.coffee)) return { ok: false, reason: 'err.cash' };
+        sh.coffeeUsed = true; this.bonusHoursNext += 3; return { ok: true };
       }
+      if (kind === 'cpu' || kind === 'gpu' || kind === 'ram') {
+        const p = this.hwPrice(kind); if (p == null) return { ok: false };
+        if (!pay(p)) return { ok: false, reason: 'err.cash' };
+        if (kind === 'cpu') this.hw.cols += 1;
+        if (kind === 'gpu') this.hw.rows += 1;
+        if (kind === 'ram') this.hw.ram += CONFIG.ramStep;
+        return { ok: true };
+      }
+      if (kind === 'hda') {
+        if (!this.hasRelic('hda') || sh.hdaUsed) return { ok: false };
+        const a = this.cards.find(c => c.uid === arg), b = this.cards.find(c => c.uid === arg2);
+        if (!a || !b || a === b || a.parts || b.parts) return { ok: false };
+        if (NODE_DEFS[a.type].source && NODE_DEFS[b.type].source) return { ok: false };
+        if (NODE_DEFS[b.type].source || NODE_DEFS[b.type].merge || NODE_DEFS[a.type].merge) return { ok: false, reason: 'err.hdaOrder' };
+        if (!pay(CONFIG.shop.hda)) return { ok: false, reason: 'err.cash' };
+        this.cards = this.cards.filter(c => c !== a && c !== b);
+        this.cards.push(makeCard('hda', { type: a.type, parts: [a.type, b.type], q: 1, up: 0, hda: true }));
+        sh.hdaUsed = true;
+        return { ok: true };
+      }
+      return { ok: false };
+    }
+    nextWeek() {
+      if (this.phase !== 'weekend') return;
+      this.week += 1;
+      this.shop = null;
+      this.lastDelivery = null;
+      this.beginWeek();
     }
 
-    kill(reason) {
-      const s = this.state;
-      s.status = 'dead';
-      s.phase = 'dead';
-      s.endedReason = reason || 'end.broke';
-    }
+    log(kind, v) { this.history.push({ w: this.week, kind, v }); }
+  }
 
-    restart() {
-      this.seed = (Date.now() >>> 0);
-      this.rng = createRng(this.seed);
-      this.newGame();
-    }
+  function snapshotLook(s, relics) {
+    const stars = {};
+    for (const e of ELEMENT_IDS) stars[e] = streamStars(s, relics, e);
+    return {
+      model: s.model, tex: s.tex, stylized: s.stylized, lit: s.lit, night: s.night, final: s.final, plate: s.plate, onPlate: s.onPlate,
+      env: s.env, grain: s.grain, smoke: s.smoke, polish: Math.max(0, s.polish), stars, dead: s.dead, organic: s.organic, hard: s.hard, anim: s.anim, texMatch: s.texMatch
+    };
   }
 
   /* ================================================================
-   * 8. 导出
+   * 11. UI strings
    * ================================================================ */
-  const VFXEngine = {
-    CONFIG: CONFIG,
-    DEFAULT_LANG: DEFAULT_LANG,
-    LANGS: LANGS,
-    I18N: I18N,
-    t: t,
-    L: L,
-    loc: loc,
-    PORTS: PORTS,
-    PORT_ORDER: PORT_ORDER,
-    DEPARTMENTS: DEPARTMENTS,
-    NODE_DEFS: NODE_DEFS,
-    NODE_TYPES: NODE_TYPES,
-    RELICS: RELICS,
-    RELIC_IDS: RELIC_IDS,
-    RULES: RULES,
-    COMPANY_NAMES: COMPANY_NAMES,
-    makeRng: makeRng,
-    createRng: createRng,
-    makeCard: makeCard,
-    createCard: makeCard,
-    emptyGrid: emptyGrid,
-    createEmptyGrid: emptyGrid,
-    evaluate: evaluate,
-    preview: preview,
-    cookBoard: cookBoard,
-    explosionChance: explosionChance,
-    getRule: getRule,
-    generateLevels: generateLevels,
-    Game: Game,
-    version: '1.1.0'
-  };
+  const I18N = UI_TEXT;
 
-  if (typeof module !== 'undefined' && module.exports) {
-    module.exports = VFXEngine;
-  }
-  if (typeof globalThis !== 'undefined') {
-    globalThis.VFXEngine = VFXEngine;
-  } else {
-    global.VFXEngine = VFXEngine;
-  }
-})(typeof globalThis !== 'undefined' ? globalThis : this);
+  const API = {
+    CONFIG, DEPTS, ELEMENTS, ELEMENT_IDS, REQS, NODE_DEFS, NODE_IDS, RELICS, BACKGROUNDS, CLIENTS, STUDIOS, I18N, LANGS,
+    loc, L, t, setLang, getLang, mulberry32, hashStr,
+    emptyGrid, makeCard, cardParts, cardDept, cardHours, cardRam, cardRisk, isSolverCard, cardHasQuality,
+    newStream, evaluate, streamStars, streamCap, dominantElement, gradeShot, notesFor, reqLoc,
+    genGig, genTest, genPortfolio, checkGate, reelGate,
+    simParams, simInit, simStep, simBonus, simPredict, snapshotLook,
+    Game
+  };
+  if (typeof module !== 'undefined' && module.exports) module.exports = API;
+  global.VFXEngine = API;
+})(typeof window !== 'undefined' ? window : globalThis);
