@@ -65,7 +65,10 @@
    * ================================================================ */
   const CONFIG = {
     startCash: 1500,
-    rent: 380,
+    // Rent is the real clock. 380 left every strategy with a five-figure
+    // cushion by week 12; 600 with the 4b pay/difficulty curve puts an
+    // all-gigs player at genuine risk without making the dream unreachable.
+    rent: 600,
     catFood: 30,
     weeks: 12,
     testWeeks: { 4: 'kiln', 8: 'northlight', 12: 'halcyon' },
@@ -79,7 +82,10 @@
     qualityHours: 1,
     capUnlit: 2, capNoComp: 3.5, maxStars: 5,
     gradeMult: { C: 0.85, B: 1.1, A: 1.5, S: 2.1 },
-    gradePts: { B: 3, A: 6, S: 9 },
+    // A and S bars raised/lowered together: the old 6/9 piled 59% of shots on
+    // A while S stayed reachable. 6.5/8.5 spreads the letters without making S
+    // routine (balance batch 4b).
+    gradePts: { B: 3, A: 6.5, S: 8.5 },
     polishSoftCap: 3, polishSoftRate: 0.5,
     killFee: 0.15,
     solver: {
@@ -88,10 +94,12 @@
       // Detail growth decays as the sim runs (late frames pay less), and spikes
       // get more likely over time. Together they make “when to stop” a real
       // judgement call instead of a constant frame or a constant percentage.
-      detailDecay: 0.5, spikeBase: 0.03, spikePerFrame: 0.002, spikeMul: 2.6,
+      detailDecay: 0.5, spikeBase: 0.03, spikePerFrame: 0.004, spikeMul: 2.6,
       // The UI only shows three bands, and each sim shifts them by ±jitter so
-      // “stop when it says danger” is a good habit, not an exact rule.
-      bands: { warn: 45, danger: 68, jitter: 12 },
+      // “stop when it says danger” is a good habit, not an exact rule. jitter
+      // 20 + rising spikes makes “danger + 2 more frames” a real gamble: the
+      // best three-band habit is now >15% below perfect knowledge.
+      bands: { warn: 45, danger: 68, jitter: 20 },
       thresholds: [30, 60, 90, 120], qDetail: [1, 1, 1.22, 1.45], qInst: [1, 1, 1.25, 1.55]
     },
     shop: {
@@ -100,6 +108,12 @@
       coffee: 45, relicCount: 2, relicMin: 220, relicMax: 360, hda: 220
     },
     gigPay: { base: 420, perWeek: 75 },
+    // When the one gig aimed at your specialty is still a reach too far, how
+    // many ★ may the board quietly lower the bar? 99 = all the way down to what
+    // the deck can reach (the old, very forgiving behaviour); 0 = no help.
+    // 0 keeps “one job speaks to your deck” from becoming “one job is free”:
+    // some weeks have no passable board at all (balance batch 4b).
+    gigStarGrace: 0,
     farmMaxPerJob: 3
   };
 
@@ -474,14 +488,18 @@
    * ================================================================ */
   const BASICS = ['box', 'box', 'shader', 'light', 'light', 'comp', 'comp', 'merge', 'plate'];
   const BACKGROUNDS = {
-    pyro:     { el: 'fire', relic: 'nerd_fire', cards: ['pyrosrc', 'pyro', 'turb', 'collision', 'hardsurf'], cash: 0,
+    // Starting cash is a balance dial too: a single-element specialist has to
+    // buy a second chain before Halcyon's diversity gate is reachable, and the
+    // FLIP chain costs more RAM than the others. These numbers keep the four
+    // starts within the same eviction/dream band (balance batch 4b).
+    pyro:     { el: 'fire', relic: 'nerd_fire', cards: ['pyrosrc', 'pyro', 'turb', 'collision', 'hardsurf'], cash: 300,
       name: loc('Pyro TD', 'Pyro TD'), desc: loc('Fire specialist. Starts with a Pyro chain and Pyro Nerd.', '火焰专精。开局有 Pyro 链和火焰狂人。') },
-    water:    { el: 'water', relic: 'nerd_water', cards: ['flipsrc', 'flip', 'white', 'collision', 'terrain'], cash: 0,
+    water:    { el: 'water', relic: 'nerd_water', cards: ['flipsrc', 'flip', 'white', 'collision', 'terrain'], cash: 1000,
       name: loc('Water Wrangler', '驯水师'), desc: loc('Water specialist. FLIP chain, but FLIP is heavy.', '水专精。FLIP 链，但 FLIP 很重。') },
-    creature: { el: 'creature', relic: 'nerd_creature', cards: ['sculpt', 'skin', 'rig', 'mocap', 'muscle'], cash: 0,
+    creature: { el: 'creature', relic: 'nerd_creature', cards: ['sculpt', 'skin', 'rig', 'mocap', 'muscle'], cash: 600,
       name: loc('Creature Artist', '生物艺术家'), desc: loc('Creature specialist. Safe, steady chain with no solver.', '生物专精。稳的链，没有解算器。') },
-    generalist: { el: null, relic: 'usd', cards: ['fracture', 'rbd', 'popsrc', 'threept', 'grade', 'hardsurf'], cash: 200,
-      name: loc('Generalist', '多面手'), desc: loc('A bit of everything, USD Pipeline and +$200.', '什么都会一点，USD 管线，+$200。') }
+    generalist: { el: null, relic: 'usd', cards: ['fracture', 'rbd', 'popsrc', 'threept', 'grade', 'hardsurf'], cash: 300,
+      name: loc('Generalist', '多面手'), desc: loc('A bit of everything, USD Pipeline and +$300.', '什么都会一点，USD 管线，+$300。') }
   };
 
   /* ================================================================
@@ -1059,7 +1077,12 @@
     const allReqs = out.concat(gig.hidden ? [gig.hidden] : []);
     let reachable = deckStarsFor(caps, gig.hero, allReqs);
     while (reachable >= 1 && deckMinHours(caps, gig.hero, allReqs, reachable) > budget) reachable -= 1;
-    if (gig.minStars > reachable) gig.minStars = Math.max(1, round1(reachable));
+    if (gig.minStars > reachable) {
+      // The specialty gig is guaranteed to speak to your deck, but it is not a
+      // free pass: the board only discounts the star bar by a limited grace.
+      const grace = CONFIG.gigStarGrace == null ? 99 : CONFIG.gigStarGrace;
+      gig.minStars = Math.max(1, round1(Math.max(reachable, gig.minStars - grace)));
+    }
     if (gig.flipTo) {
       const flipStars = Math.max(1, gig.minStars - 0.5);
       const alt = ELEMENT_IDS.filter(e => e !== gig.hero && flipFeasible(caps, gig, e, flipStars, allReqs, budget));

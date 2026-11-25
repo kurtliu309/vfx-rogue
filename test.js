@@ -272,7 +272,8 @@ test('polish: same source counts once; quality-tier polish counts per node', () 
 });
 
 test('grades: B/A/S thresholds, new multipliers, soft polish cap', () => {
-  assert.deepStrictEqual(V.CONFIG.gradePts, { B: 3, A: 6, S: 9 });
+  // 4b: A raised to 6.5 and S lowered to 8.5 so no letter owns the board.
+  assert.deepStrictEqual(V.CONFIG.gradePts, { B: 3, A: 6.5, S: 8.5 });
   assert.deepStrictEqual(V.CONFIG.gradeMult, { C: 0.85, B: 1.1, A: 1.5, S: 2.1 });
   const s = V.newStream();
   s.geo = true; s.tex = true; s.lit = true; s.final = true; s.step.fire = 4;
@@ -281,8 +282,8 @@ test('grades: B/A/S thresholds, new multipliers, soft polish cap', () => {
   assert.strictEqual(r.stars, 4);
   assert.strictEqual(r.pts, 4);
   assert.strictEqual(r.grade, 'B');
-  s.polish = 2; r = V.gradeShot(b, s, []);
-  assert.strictEqual(r.pts, 6); assert.strictEqual(r.grade, 'A');
+  s.polish = 3; r = V.gradeShot(b, s, []);
+  assert.strictEqual(r.pts, 7); assert.strictEqual(r.grade, 'A');
   // Raw polish 8 stays 8 for requirements/UI; grading uses 3 + (8−3)×0.5 = 5.5.
   s.polish = 8; r = V.gradeShot(b, s, []);
   assert.strictEqual(r.polish, 8);
@@ -519,7 +520,7 @@ test('full headless run of 12 weeks with a scripted player never throws', () => 
   }
 });
 
-test('board: the gig for your best element is always deck-satisfiable', () => {
+test('board: the gig for your best element always has satisfiable requirements', () => {
   for (const bg of Object.keys(V.BACKGROUNDS)) {
     for (let seed = 1; seed <= 4; seed++) {
       const g = new V.Game(seed * 977).start(bg);
@@ -539,11 +540,11 @@ test('board: the gig for your best element is always deck-satisfiable', () => {
             if (q.id === 'polish') assert.ok(q.n <= heroPolish, 'polish ' + q.n + ' > ' + heroPolish + ' (' + bg + ' w' + w + ')');
             else assert.ok(caps.reqs[q.id], 'unsatisfiable ' + q.id + ' (' + bg + ' seed ' + seed + ' week ' + w + ')');
           }
-          const reachable = V.deckStarsFor(caps, fav, allReqs);
-          assert.ok(gig.minStars <= reachable, 'star bar ' + gig.minStars + ' > ' + reachable + ' (' + bg + ' w' + w + ')');
-          const budget = V.CONFIG.baseHours + (gig.hoursMod || 0);
-          const step = Math.max(1, Math.floor(gig.minStars));
-          assert.ok(V.deckMinHours(caps, fav, allReqs, step) <= budget, 'hours ' + V.deckMinHours(caps, fav, allReqs, step) + ' > ' + budget + ' (' + bg + ' w' + w + ')');
+          // 4b: the specialty gig guarantees a matching brief and satisfiable
+          // requirements, not a free star bar. With gigStarGrace 0 the board may
+          // aim above the deck (that is where 0/3 weeks come from).
+          assert.strictEqual(V.CONFIG.gigStarGrace, 0);
+          assert.ok(gig.minStars <= 4.5, 'star bar sane (' + bg + ' w' + w + ')');
         }
         g.cash = 5000; g.job = null; g.lastDelivery = {};
         g.toWeekend();
@@ -596,7 +597,8 @@ test('Dust Pass adds smoke to any stream without adding hero stars', () => {
 
 test('Halcyon: reachable numbers and auteur tests do not move the polish bar', () => {
   const st = V.STUDIOS.halcyon;
-  assert.strictEqual(st.minStars, 3.5);
+  // 4b: the dream test is a ★4.5 bar, not ★3.5 — a good reel is not enough.
+  assert.strictEqual(st.minStars, 4.5);
   assert.strictEqual(st.hoursMod, 2);
   assert.strictEqual(st.reqs.find(q => q.id === 'polish').n, 2);
   const b = { kind: 'test', studio: 'halcyon', hero: 'fire', minStars: 3.5, reqs: JSON.parse(JSON.stringify(st.reqs)), revealed: [] };

@@ -57,17 +57,17 @@
   /* ---------------- studios (tests) ---------------- */
   const STUDIOS = {
     kiln: { rep: 'tess', persona: 'studio', name: loc('Kiln & Co', 'Kiln & Co'), kind: loc('Commercial studio', '广告工作室'),
-      gate: { count: 1, stars: 2 }, minStars: 2.5, heroChoice: true, hoursMod: 2,
-      reqs: [{ id: 'lit' }, { id: 'tex' }, { id: 'final' }, { id: 'polish', n: 2 }],
+      gate: { count: 1, stars: 2 }, minStars: 4, heroChoice: true, hoursMod: 2,
+      reqs: [{ id: 'lit' }, { id: 'tex' }, { id: 'final' }, { id: 'polish', n: 3 }],
       shotName: loc('Kiln Test Shot', 'Kiln 测试镜头'),
       offer: loc('Tess: “Junior FX, full-time, health insurance, Fridays off at four. Start Monday?”', 'Tess：“初级特效，全职，有医保，周五四点下班。周一来？”') },
     northlight: { rep: 'ravi', persona: 'secret', name: loc('Northlight Studios', 'Northlight 工作室'), kind: loc('Episodic TV', '剧集'),
-      gate: { count: 2, stars: 3 }, minStars: 3.5, heroChoice: true, hoursMod: 3, hidden: { id: 'night' },
+      gate: { count: 2, stars: 3 }, minStars: 4.5, heroChoice: true, hoursMod: 3, hidden: { id: 'night' },
       reqs: [{ id: 'lit' }, { id: 'tex' }, { id: 'final' }, { id: 'grain' }, { id: 'polish', n: 3 }],
       shotName: loc('Northlight Test', 'Northlight 测试'),
       offer: loc('Ravi: “Mid-level FX on a fantasy series. Two seasons guaranteed. We\'d be lucky to have you.”', 'Ravi：“奇幻剧集的中级特效，保底两季。能请到你是我们的运气。”') },
     halcyon: { rep: 'oona', persona: 'auteur', name: loc('Halcyon Pictures', 'Halcyon Pictures'), kind: loc('Feature film · the dream', '院线电影·梦想公司'),
-      gate: { count: 3, stars: 3, distinct: 2, top: 4 }, minStars: 3.5, heroChoice: true, hoursMod: 2,
+      gate: { count: 3, stars: 3, distinct: 2, top: 4 }, minStars: 4.5, heroChoice: true, hoursMod: 2,
       reqs: [{ id: 'lit' }, { id: 'tex' }, { id: 'final' }, { id: 'plate' }, { id: 'grain' }, { id: 'polish', n: 2 }],
       shotName: loc('The Halcyon Test', 'Halcyon 终极测试'),
       offer: loc('', '') }
