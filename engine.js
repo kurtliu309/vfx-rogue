@@ -85,6 +85,13 @@
     solver: {
       frames: 48, detailRate: 2.6, instBase: 1.0, instAccel: 0.08,
       collisionMul: 0.6, guruMul: 0.78, animMul: 1.15,
+      // Detail growth decays as the sim runs (late frames pay less), and spikes
+      // get more likely over time. Together they make “when to stop” a real
+      // judgement call instead of a constant frame or a constant percentage.
+      detailDecay: 0.5, spikeBase: 0.03, spikePerFrame: 0.002, spikeMul: 2.6,
+      // The UI only shows three bands, and each sim shifts them by ±jitter so
+      // “stop when it says danger” is a good habit, not an exact rule.
+      bands: { warn: 45, danger: 68, jitter: 12 },
       thresholds: [30, 60, 90, 120], qDetail: [1, 1, 1.22, 1.45], qInst: [1, 1, 1.25, 1.55]
     },
     shop: {
@@ -690,6 +697,7 @@
     const persona = client ? client.persona : (studio ? studio.persona : 'mentor');
     const lines = [];
     const changes = {};
+    let choice = null;
     const NL = STORY.NOTE_LINES;
     if (g.dead) lines.push(pick(rng, NL.dead));
     else if (g.missing.includes('nostream')) lines.push(pick(rng, NL.nothing));
@@ -732,6 +740,24 @@
           lines.push(pick(rng, NL.auteur));
           changes.polish = true;
         }
+      } else if (persona === 'easy') {
+        // Easy clients are a resource: deliver this week and they round up.
+        brief.twisted = true;
+        brief.payBoost = 1.2;
+        lines.push(pick(rng, NL.easy));
+        changes.payBoost = 1.2;
+      } else if (persona === 'pincher') {
+        // Tight budget is a trade-off, not a hidden −3h. The player picks one.
+        brief.twisted = true;
+        lines.push(pick(rng, NL.pincher));
+        choice = {
+          kind: 'pincher', defaultKey: 'pay',
+          options: [
+            { key: 'hours', label: NL.pincherHours },
+            { key: 'pay', label: NL.pincherPay }
+          ]
+        };
+        changes.noteChoice = 'pincher';
       }
     }
     if (g.pass && !lines.length) {
@@ -739,7 +765,7 @@
       else lines.push(pick(rng, NL.ok));
     }
     if (!lines.length) lines.push(pick(rng, NL.ok));
-    return { persona, lines, changes };
+    return { persona, lines, changes, choice };
   }
   function reqLoc(rq) {
     const d = REQS[rq.id];
@@ -1013,7 +1039,22 @@
     }
     return gig;
   }
-  function genGig(rng, week, clientId, bg) {
+  /* A flipper's new hero should be something the player can actually pivot to:
+   * prefer the deck's second-strongest element, so owning a second chain turns
+   * the twist from a punishment into a plan. */
+  function flipTargetFor(caps, gig, rng) {
+    const flipStars = Math.max(1, gig.minStars - 0.5);
+    const allReqs = gig.reqs.concat(gig.hidden ? [gig.hidden] : []);
+    const budget = CONFIG.baseHours + (gig.hoursMod || 0);
+    const ranked = ELEMENT_IDS.slice().sort((a, b) => (caps.maxStars[b] || 0) - (caps.maxStars[a] || 0));
+    const ok = e => e !== gig.hero && e !== gig.flipFrom &&
+      deckStarsFor(caps, e, allReqs) >= flipStars &&
+      deckMinHours(caps, e, allReqs, Math.max(1, Math.floor(flipStars))) <= budget;
+    let target = ranked[1] || ranked[0];
+    if (!ok(target)) target = ranked.find(ok);
+    return target || pick(rng, ELEMENT_IDS.filter(e => e !== gig.hero));
+  }
+  function genGig(rng, week, clientId, bg, caps) {
     const cl = CLIENTS[clientId];
     const hero = (cl.heroes && rng() < 0.7) ? pick(rng, cl.heroes) : pick(rng, ELEMENT_IDS);
     const minStars = clamp(round1(1 + week * 0.24 + (rng() < 0.3 ? 0.5 : 0)), 1, 4.5);
@@ -1025,7 +1066,14 @@
     for (let i = 0; i < extraN && i < pool.length; i++) reqs.push({ id: pool[i] });
     if (cl.persona === 'auteur') reqs.push({ id: 'polish', n: 2 + Math.floor(week / 4) });
     else if (week >= 7 && rng() < 0.5) reqs.push({ id: 'polish', n: 2 });
-    const hidden = cl.persona === 'secret' ? { id: pick(rng, REQ_POOL.filter(x => !reqs.some(q => q.id === x) && x !== 'plate')) } : null;
+    // Secret requirements are only drawn from what this deck can actually
+    // satisfy — a legal surprise, not an impossible one.
+    let hidden = null;
+    if (cl.persona === 'secret') {
+      const base = REQ_POOL.filter(x => !reqs.some(q => q.id === x) && x !== 'plate');
+      const deckOk = caps ? base.filter(id => caps.reqs[id]) : base;
+      hidden = { id: pick(rng, deckOk.length ? deckOk : base) };
+    }
     let pay = Math.round((CONFIG.gigPay.base + CONFIG.gigPay.perWeek * week) * (cl.payMul || 1) * (0.9 + rng() * 0.25) / 10) * 10;
     const hoursMod = cl.hoursMod || 0;
     const nda = cl.nda === true ? true : (cl.nda === false ? false : rng() < 0.3);
@@ -1097,15 +1145,35 @@
     return { detail: S.detailRate * S.qDetail[q], inst, accel, frames: S.frames, el };
   }
   function simInit(params, seed) {
-    return { f: 0, detail: 0, inst: 0, diverged: false, done: false, params, seed: seed >>> 0, history: [] };
+    const S = CONFIG.solver;
+    const brng = mulberry32((seed >>> 0) ^ 0x9e3779b9);
+    const bandShift = Math.round((brng() * 2 - 1) * S.bands.jitter);
+    return { f: 0, detail: 0, inst: 0, diverged: false, done: false, params, seed: seed >>> 0, history: [], bandShift };
+  }
+  /* The player never sees the instability number — only these three bands.
+   * bandShift is drawn per sim so the band edges move around. */
+  function simBand(inst, bandShift) {
+    const B = CONFIG.solver.bands;
+    const s = bandShift || 0;
+    if (inst >= B.danger + s) return 'danger';
+    if (inst >= B.warn + s) return 'warn';
+    return 'steady';
+  }
+  function simSpikeChance(f) {
+    const S = CONFIG.solver;
+    return Math.min(0.5, S.spikeBase + S.spikePerFrame * f);
   }
   function simStep(st, rng) {
     if (st.done) return st;
     const p = st.params;
+    const S = CONFIG.solver;
     st.f += 1;
-    st.detail += p.detail * (0.85 + rng() * 0.3);
+    // detail growth decays towards the end of the run: the first frames are
+    // worth more than the last ones, so “just one more frame” has a cost.
+    const decay = Math.max(0, 1 - S.detailDecay * st.f / p.frames);
+    st.detail += p.detail * decay * (0.85 + rng() * 0.3);
     let g = (p.inst + p.accel * st.f) * (0.55 + rng() * 0.9);
-    if (rng() < 0.06) g *= 2.6; // spike
+    if (rng() < simSpikeChance(st.f)) g *= S.spikeMul; // spikes, increasing with frame
     st.inst += g;
     st.history.push(Math.round(st.inst));
     if (st.inst >= 100) { st.diverged = true; st.done = true; }
@@ -1118,10 +1186,19 @@
     for (const x of th) if (detail >= x) b += 0.5;
     return b;
   }
-  function simPredict(params) {
-    // expected divergence frame (no noise) for the Wedge relic
+  function simPredict(params, seed) {
+    // expected divergence frame (no noise) for the Wedge relic. With a seed the
+    // prediction is off by up to ±3 frames, like a human eyeballing the graph.
     let inst = 0;
-    for (let f = 1; f <= params.frames; f++) { inst += (params.inst + params.accel * f); if (inst >= 100) return f; }
+    for (let f = 1; f <= params.frames; f++) {
+      inst += (params.inst + params.accel * f);
+      if (inst >= 100) {
+        if (seed == null) return f;
+        const r = mulberry32((seed >>> 0) ^ 0x51ed270b)();
+        const err = Math.round((r * 2 - 1) * 3);
+        return clamp(f + err, 3, params.frames);
+      }
+    }
     return null;
   }
 
@@ -1189,9 +1266,15 @@
     makeBoard() {
       const rng = mulberry32(this.seed ^ (this.week * 7919));
       const pool = shuffle(rng, Object.keys(CLIENTS).filter(id => !CLIENTS[id].minWeek || CLIENTS[id].minWeek <= this.week));
+      const caps = deckCapabilities(this.cards, this.hw, this.relicSet());
       const gigs = [];
       const n = this.week === 1 ? 1 : 3;
-      for (let i = 0; i < n; i++) gigs.push(genGig(rng, this.week, this.week === 1 ? 'rumble' : pool[i % pool.length], this.bg));
+      for (let i = 0; i < n; i++) gigs.push(genGig(rng, this.week, this.week === 1 ? 'rumble' : pool[i % pool.length], this.bg, caps));
+      // Flippers swing towards the second-strongest element in the deck.
+      for (const gg of gigs) {
+        const cl = CLIENTS[gg.client];
+        if (cl && cl.persona === 'flipper') gg.flipTo = flipTargetFor(caps, gg, rng);
+      }
       // one gig always speaks to what you're good at — and it must be doable
       const fav = this.favoriteElement();
       if (n > 1 && fav) {
@@ -1199,9 +1282,8 @@
         if (gi < 0) {
           gi = Math.floor(rng() * n);
           gigs[gi].hero = fav; gigs[gi].title = pick(rng, ELEMENTS[fav].noun);
-          if (gigs[gi].flipTo === fav) gigs[gi].flipTo = pick(rng, ELEMENT_IDS.filter(e => e !== fav));
+          if (gigs[gi].flipTo === fav) gigs[gi].flipTo = flipTargetFor(caps, gigs[gi], rng);
         }
-        const caps = deckCapabilities(this.cards, this.hw, this.relicSet());
         makeGigFeasible(gigs[gi], this.week, caps, rng);
       }
       if (this.week === 1) { gigs[0].minStars = 1; gigs[0].reqs = [{ id: 'lit' }]; gigs[0].hero = BACKGROUNDS[this.bg].el || 'destr'; gigs[0].tutorial = true; gigs[0].title = ELEMENTS[gigs[0].hero].noun[0]; gigs[0].pay = 520; gigs[0].nda = false; }
@@ -1331,6 +1413,9 @@
     prepareCook() {
       const j = this.job;
       if (!j) return { ok: false };
+      // A note that asks the player to choose blocks the next cook; doing it
+      // anyway falls back to the safe default (headless bots rely on this).
+      if (j.pendingNote) this.resolveNote(j.pendingNote.defaultKey);
       if (j.dailiesUsed >= j.dailiesMax) return { ok: false, reason: 'err.noDailies' };
       const ev = this.preview();
       if (ev.oom) return { ok: false, reason: 'err.oom' };
@@ -1346,7 +1431,8 @@
         // solver only sims if its upstream would be valid: check that check passes
         const inStream = c > 0 ? ev.streams[r][c - 1] : null;
         const params = simParams(card, { collision: collisionNear(j.grid, r, c), guru: this.hasRelic('guru'), wedge: this.hasRelic('wedge'), anim: !!(inStream && inStream.anim), tutorial: !!j.brief.tutorial });
-        sims.push({ key, r, c, type: card.type, params, seed: (j.seedBase + j.dailiesUsed * 131 + r * 17 + c * 7) >>> 0, predict: this.hasRelic('wedge') ? simPredict(params) : null });
+        const seed = (j.seedBase + j.dailiesUsed * 131 + r * 17 + c * 7) >>> 0;
+        sims.push({ key, r, c, type: card.type, params, seed, predict: this.hasRelic('wedge') ? simPredict(params, seed) : null });
       }
       return { ok: true, sims, cost: ev.cost, ev };
     }
@@ -1397,6 +1483,7 @@
       const g = ev.best;
       const notes = notesFor(j.brief, g, j.dailiesUsed, rng);
       j.dailiesUsed += 1;
+      if (notes.choice) j.pendingNote = notes.choice;
       j.last = { sigs: ev.sigs, okKeys, solver, fails, grade: g, stream: g && ev.rowOut[g.row], ev, fresh, oomRow, notes, cost: plan.cost, cachedCount: Object.values(ev0.cached).filter(Boolean).length };
       // grade again after notes possibly changed the brief (twists apply to NEXT delivery)
       j.last.gradeAfter = gradeShot(j.brief, j.last.stream, this.relicSet());
@@ -1405,7 +1492,28 @@
       return { ok: true, ev, grade: g, notes, fresh, oomRow, cost: plan.cost };
     }
 
-    canDeliver() { return !!(this.job && this.job.last); }
+    /* Resolve a note that offered the player a choice (pincher budget meeting).
+     * The UI blocks cook/deliver until this is called; headless callers get the
+     * safe default automatically. */
+    resolveNote(key) {
+      const j = this.job;
+      if (!j || !j.pendingNote) return { ok: false };
+      const ch = j.pendingNote;
+      const opt = ch.options.find(o => o.key === key) || ch.options.find(o => o.key === ch.defaultKey) || ch.options[0];
+      if (ch.kind === 'pincher') {
+        if (opt.key === 'hours') {
+          const before = j.hoursLeft;
+          j.hoursLeft = Math.max(0, Math.round(j.hoursLeft * 0.8));
+          j.brief.hoursCut = before - j.hoursLeft;
+        } else {
+          j.brief.payMulNote = 0.8;
+        }
+        j.brief.twistChoice = opt.key;
+      }
+      j.pendingNote = null;
+      return { ok: true, key: opt.key };
+    }
+    canDeliver() { return !!(this.job && this.job.last && !this.job.pendingNote); }
     abandon() {
       const j = this.job; if (!j) return { ok: false };
       j.last = { stream: null, sigs: [], okKeys: {}, solver: {}, fails: {} };
@@ -1435,11 +1543,13 @@
     deliver() {
       const j = this.job;
       if (!j || !j.last) return { ok: false };
+      if (j.pendingNote) this.resolveNote(j.pendingNote.defaultKey);
       const g = gradeShot(j.brief, j.last.stream, this.relicSet());
       const b = j.brief;
       let pay = 0;
       if (b.kind === 'gig') {
-        pay = g.pass ? Math.round(b.pay * CONFIG.gradeMult[g.grade] * (b.client && CLIENTS[b.client].persona === 'flipper' && b.twisted ? 1.3 : 1) / 10) * 10 : Math.round(b.pay * CONFIG.killFee / 10) * 10;
+        const noteMul = (b.payBoost || 1) * (b.payMulNote || 1);
+        pay = g.pass ? Math.round(b.pay * CONFIG.gradeMult[g.grade] * (b.client && CLIENTS[b.client].persona === 'flipper' && b.twisted ? 1.3 : 1) * noteMul / 10) * 10 : Math.round(b.pay * CONFIG.killFee / 10) * 10;
       }
       const s = j.last.stream;
       const el = (s && !s.dead) ? (dominantElement(s, this.relicSet()) || b.hero) : b.hero;
@@ -1604,8 +1714,8 @@
     emptyGrid, makeCard, cardParts, cardDept, cardHours, cardRam, cardRisk, isSolverCard, cardHasQuality,
     newStream, evaluate, streamStars, streamCap, dominantElement, gradeShot, notesFor, reqLoc,
     genGig, genTest, genPortfolio, checkGate, reelGate,
-    deckTypes, deckChainStep, deckCapabilities, deckRowFit, deckStarsFor, deckPolishFor, deckMinHours, makeGigFeasible, REQ_ENABLERS, NODE_UNLOCKS,
-    simParams, simInit, simStep, simBonus, simPredict, snapshotLook,
+    deckTypes, deckChainStep, deckCapabilities, deckRowFit, deckStarsFor, deckPolishFor, deckMinHours, makeGigFeasible, flipTargetFor, REQ_ENABLERS, NODE_UNLOCKS,
+    simParams, simInit, simStep, simBonus, simPredict, simBand, simSpikeChance, snapshotLook,
     Game
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = API;

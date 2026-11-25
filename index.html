@@ -169,6 +169,14 @@ img.px{image-rendering:pixelated}
 .simbar i{position:absolute;left:0;top:0;bottom:0}
 .simbar .tick{position:absolute;top:0;bottom:0;width:2px;background:rgba(255,255,255,.35)}
 .simbar .pred{position:absolute;top:-2px;bottom:-2px;width:2px;background:var(--bad)}
+.bandrow{display:flex;gap:6px;margin-top:4px}
+.bandpip{font-family:var(--mono);font-size:10px;line-height:1.4;padding:1px 6px;border:1px solid var(--line);color:var(--muted);opacity:.45}
+.bandpip.on{opacity:1;font-weight:700}
+.bandpip.steady.on{border-color:var(--good);color:var(--good)}
+.bandpip.warn.on{border-color:var(--warn);color:var(--warn)}
+.bandpip.danger.on{border-color:var(--bad);color:var(--bad)}
+.notepick{margin-top:8px;padding:8px;background:#000;border-left:3px solid var(--gold)}
+.notepick .choices{margin-top:6px}
 .shake{animation:shake .3s}
 @keyframes shake{0%,100%{transform:none}25%{transform:translate(-3px,1px)}50%{transform:translate(3px,-1px)}75%{transform:translate(-2px,0)}}
 .stamp{animation:stamp .5s cubic-bezier(.2,1.6,.4,1)}
@@ -435,6 +443,7 @@ function viewWork() {
   const heroOk = curStars >= b.minStars;
   const freshSims = j.grid.flat().filter((c, i) => c && E.isSolverCard(c)).length;
   const notes = j.notes.map((n, i) => n.lines.map(l => `<div class="note"><div class="nh">#${i + 1} · ${esc(w.name)}</div>${esc(L(l))}</div>`).join('')).reverse().join('') || `<div class="dim">${t('work.noNotes')}</div>`;
+  const notePick = j.pendingNote ? `<div class="notepick"><div class="muted" style="font-size:12px">${t('note.choose')}</div><div class="choices">${j.pendingNote.options.map(o => `<button class="btn" data-act="notechoice" data-k="${o.key}">${esc(L(o.label))}</button>`).join('')}</div></div>` : '';
   let tut = '';
   if (b.tutorial) {
     const placed = j.grid.flat().filter(Boolean);
@@ -448,7 +457,7 @@ function viewWork() {
     <div class="ptitle" style="margin-top:8px">${t('work.reqs')}</div><div class="reqlist">${reqRows}</div>
     <div class="stat"><span>${t('work.polish', { n: best ? best.polish : 0 })}</span><span class="g-${best ? best.grade : 'F'}" style="font-weight:700">${t('work.gradePreview', { g: best ? best.grade : 'F' })}</span></div>
     ${b.kind === 'gig' ? `<div class="stat"><span class="muted">${t('board.pay')}</span><span class="goldt">${t('board.payVal', { n: b.pay })}</span></div>` : ''}
-    <div class="ptitle" style="margin-top:10px">${t('work.notes')}</div><div class="notes">${notes}</div>
+    <div class="ptitle" style="margin-top:10px">${t('work.notes')}</div><div class="notes">${notes}</div>${notePick}
   </div>`;
   // grid
   const R = ev.R, C = ev.C;
@@ -494,7 +503,7 @@ function viewWork() {
     <div class="panel" style="margin-top:12px"><div class="ptitle">${t('work.toolkit')} · <span class="dim">${t('work.toolkitHint')}</span></div><div class="tray">${tray || '<span class="dim">—</span>'}</div></div>`;
   // right
   const capKey = !bestStream ? 'work.cap.unlit' : (!bestStream.lit ? 'work.cap.unlit' : (!bestStream.final ? 'work.cap.nocomp' : 'work.cap.none'));
-  const cookErr = j.dailiesUsed >= j.dailiesMax ? 'err.noDailies' : (ev.oom ? 'err.oom' : (ev.cost > j.hoursLeft ? 'err.hours' : null));
+  const cookErr = j.pendingNote ? 'err.noteChoice' : (j.dailiesUsed >= j.dailiesMax ? 'err.noDailies' : (ev.oom ? 'err.oom' : (ev.cost > j.hoursLeft ? 'err.hours' : null)));
   const pips = Array.from({ length: j.dailiesMax }, (_, i) => `<i class="${i < j.dailiesUsed ? 'on' : ''}"></i>`).join('');
   const farmP = G.farmPrice();
   const right = `<div class="panel"><div class="ptitle">${t('work.viewport')}</div>
@@ -505,7 +514,7 @@ function viewWork() {
       <div class="stat"><span>${t('work.dailies')}</span><span class="pips">${pips}</span></div>
       <div class="cookbar desk-cook">
         <button class="btn gold big" data-act="cook" ${cookErr ? 'disabled title="' + esc(t(cookErr)) + '"' : ''}>${t('work.cook')}</button>
-        <button class="btn pink big" data-act="deliver" ${j.last ? '' : 'disabled'}>${t('work.deliver')}</button>
+        <button class="btn pink big" data-act="deliver" ${j.last && !j.pendingNote ? '' : 'disabled'}>${t('work.deliver')}</button>
       </div>
       <div class="row" style="margin-top:8px;justify-content:space-between">
         <button class="btn small cyan" data-act="farm" ${j.farmBought >= E.CONFIG.farmMaxPerJob || G.cash < farmP ? 'disabled' : ''}>${j.farmBought >= E.CONFIG.farmMaxPerJob ? t('work.farmMax') : t('work.farm', { h: E.CONFIG.farmHours, p: farmP })}</button>
@@ -515,7 +524,7 @@ function viewWork() {
       ${j.dailiesUsed >= j.dailiesMax ? `<div class="warn" style="font-size:13px;margin-top:6px">${t('work.lastDaily')}</div>` : ''}
     </div>${inspector(ev)}`;
   return `<div class="work"><div class="briefcol">${brief}</div><div class="centercol">${center}</div><div class="rightcol">${right}</div></div>
-    <div class="mobile-bar"><button class="btn gold" data-act="cook" ${cookErr ? 'disabled' : ''}>${t('work.cook')} · ${ev.cost}h</button><button class="btn pink" data-act="deliver" ${j.last ? '' : 'disabled'}>${t('work.deliver')}</button></div>`;
+    <div class="mobile-bar"><button class="btn gold" data-act="cook" ${cookErr ? 'disabled' : ''}>${t('work.cook')} · ${ev.cost}h</button><button class="btn pink" data-act="deliver" ${j.last && !j.pendingNote ? '' : 'disabled'}>${t('work.deliver')}</button></div>`;
 }
 function inspector(ev) {
   let card = null, cl = null, key = UI.cell;
@@ -597,7 +606,7 @@ function simTick() {
     if (x.st.done) return;
     E.simStep(x.st, x.rng);
     if (x.st.diverged) { AU.play('diverge'); const m = $('#mbox'); if (m) { m.classList.remove('shake'); void m.offsetWidth; m.classList.add('shake'); } }
-    else if (x.st.inst > 75) AU.play('warn');
+    else if (E.simBand(x.st.inst, x.st.bandShift) === 'danger') AU.play('warn');
     else AU.play('tick');
     if (!x.st.done) alive++;
   });
@@ -633,16 +642,17 @@ function simRowsHTML() {
   const S_ = UI.sim;
   return S_.states.map((x, i) => {
     const d = E.NODE_DEFS[x.sim.type];
-    const det = Math.min(130, x.st.detail), ins = Math.min(100, x.st.inst);
+    const det = Math.min(130, x.st.detail);
     const bonus = x.st.diverged ? 0 : E.simBonus(x.st.detail);
+    const band = x.st.diverged ? 'danger' : E.simBand(x.st.inst, x.st.bandShift);
     const ticks = E.CONFIG.solver.thresholds.map(th => `<span class="tick" style="left:${th / 130 * 100}%"></span>`).join('');
-    const pred = x.sim.predict ? `<span class="pred" style="left:${x.sim.predict / x.sim.params.frames * 100}%"></span>` : '';
+    const pips = ['steady', 'warn', 'danger'].map(b => `<span class="bandpip ${b}${band === b ? ' on' : ''}">${t('sim.band.' + b)}</span>`).join('');
     const state = x.st.diverged ? `<span class="bad">${t('sim.diverged')}</span>` : (x.cachedAt != null ? `<span class="good">${t('sim.cachedAt', { f: x.cachedAt })}</span>` : (x.st.done ? `<span class="good">✓</span>` : `<button class="btn small gold" data-act="simcache" data-i="${i}">${t('sim.cache')}</button>`));
     return `<div class="simrow" id="simrow${i}">
       <div><div style="font-weight:700;color:${E.ELEMENTS[x.sim.params.el].color}">${esc(L(d.name))}</div><div class="dim" style="font-size:11px">${t('sim.frame', { f: x.st.f, n: x.sim.params.frames })}</div></div>
       <div><div class="simbar" title="${t('sim.detail')}"><i style="width:${det / 130 * 100}%;background:var(--cyan)"></i>${ticks}</div>
-        <div class="simbar" title="${t('sim.inst')}" style="margin-top:3px"><i style="width:${ins}%;background:${ins > 75 ? 'var(--bad)' : (ins > 45 ? 'var(--warn)' : 'var(--good)')}"></i>${pred ? `<span class="pred" style="left:100%"></span>` : ''}</div>
-        <div class="row" style="justify-content:space-between;font-size:11px"><span class="muted">${t('sim.detail')} ${Math.round(x.st.detail)} · <span class="goldt">${t('sim.bonus', { n: bonus })}</span></span><span class="muted">${t('sim.inst')} ${Math.round(x.st.inst)}%</span></div>
+        <div class="bandrow">${pips}</div>
+        <div class="row" style="justify-content:space-between;font-size:11px"><span class="muted">${t('sim.detail')} ${Math.round(x.st.detail)} · <span class="goldt">${t('sim.bonus', { n: bonus })}</span></span><span class="dim">${t('sim.instBand')}</span></div>
         ${x.sim.predict ? `<div class="dim" style="font-size:11px">${t('sim.wedge', { f: x.sim.predict })}</div>` : ''}</div>
       <div style="text-align:right">${state}</div></div>`;
   }).join('');
@@ -739,13 +749,14 @@ function renderModal() {
     const r = UI.lastRes, g = r.grade, j = G.job;
     const fails = r.fresh.map(f => f.pip ? `<div class="good">🐈 ${t('res.pip')}</div>` : `<div class="bad">⚠ ${t('res.fail.' + f.dept)}</div>`).join('');
     const notes = r.notes.lines.map(l => `<div class="note">${esc(L(l))}</div>`).join('');
+    const notePick = j.pendingNote ? `<div class="notepick"><div class="muted" style="font-size:12px">${t('note.choose')}</div><div class="choices">${j.pendingNote.options.map(o => `<button class="btn" data-act="notechoice" data-k="${o.key}">${esc(L(o.label))}</button>`).join('')}</div></div>` : '';
     const b = j.brief;
     h = `<div class="row" style="justify-content:space-between"><h2 style="margin:0">${t('res.title', { n: j.dailiesUsed })}</h2><span class="muted">${t('res.spent', { h: r.cost })} · ${t('res.cached', { n: j.last.cachedCount })}</span></div>
       <div class="split2" style="margin-top:8px"><div><canvas class="px" width="160" height="90" data-draw="shot" data-src="last"></canvas></div>
       <div class="col"><div class="row"><div class="gradebig stamp g-${g.grade}">${g.grade}</div><div><div class="stars" style="font-size:18px">${starStr(g.stars)}</div><div class="muted">${t('work.polish', { n: g.polish })}</div></div></div>
         ${fails}${r.oomRow != null ? `<div class="bad">${t('res.oom', { r: r.oomRow + 1 })}</div>` : ''}
-        <div class="row"><img class="px" src="${portrait(face(b), 2)}" style="width:40px;height:40px"><b>${esc(who(b).name)}</b></div>${notes}</div></div>
-      <div class="row" style="margin-top:12px"><button class="btn gold" data-act="close">${t('res.ok')}</button>${g.pass ? `<button class="btn pink" data-act="deliver">${t('work.deliver')}</button>` : ''}</div>`;
+        <div class="row"><img class="px" src="${portrait(face(b), 2)}" style="width:40px;height:40px"><b>${esc(who(b).name)}</b></div>${notes}${notePick}</div></div>
+      <div class="row" style="margin-top:12px"><button class="btn gold" data-act="close">${t('res.ok')}</button>${g.pass ? `<button class="btn pink" data-act="deliver" ${j.pendingNote ? 'disabled' : ''}>${t('work.deliver')}</button>` : ''}</div>`;
   }
   if (m.type === 'confirmDeliver') h = `<h3 style="margin-top:0">${t('work.confirmDeliver')}</h3><div class="row"><button class="btn pink" data-act="deliverYes">${t('work.deliver')}</button><button class="btn" data-act="close">${t('ui.back')}</button></div>`;
   if (m.type === 'confirmAbandon') h = `<h3 style="margin-top:0">${t('work.abandonQ')}</h3><div class="row"><button class="btn pink" data-act="abandonYes">${t('ui.yes')}</button><button class="btn" data-act="close">${t('ui.no')}</button></div>`;
@@ -784,7 +795,7 @@ function frame(now) {
       const fl = UI.flash && c.id === 'vp' ? Math.max(0, 1 - (now - UI.flashT) / 500) : 0;
       A.drawShot(ctx, lookFor(c.dataset.src), { t: now, flash: fl });
     }
-    else if (kind === 'sim' && UI.sim) A.drawSim(ctx, UI.sim.states.map(x => ({ el: x.sim.params.el, f: x.st.f, detail: x.st.detail, inst: x.st.inst, diverged: x.st.diverged, done: x.st.done })), now);
+    else if (kind === 'sim' && UI.sim) A.drawSim(ctx, UI.sim.states.map(x => ({ el: x.sim.params.el, f: x.st.f, detail: x.st.detail, inst: x.st.inst, band: E.simBand(x.st.inst, x.st.bandShift), diverged: x.st.diverged, done: x.st.done })), now);
     else if (kind === 'ending') A.drawEnding(ctx, c.dataset.id, now);
     ctx.restore();
   }
@@ -861,6 +872,7 @@ const ACT = {
   cook() { doCook(); },
   simcache(d) { simCache(d.i != null ? +d.i : null); },
   simfinish() { simFinish(); },
+  notechoice(d) { const r = G.resolveNote(d.k); if (!r.ok) { AU.play('error'); return; } AU.play('click'); if (UI.modal && UI.modal.type === 'result') renderModal(); render(); },
   deliver() { UI.modal = { type: 'confirmDeliver' }; renderModal(); },
   deliverYes() { const r = G.deliver(); UI.modal = null; renderModal(); AU.play(r.pass ? 'great' : 'bad'); if (r.pay) setTimeout(() => AU.play('cash'), 500); render(); window.scrollTo(0, 0); },
   abandon() { UI.modal = { type: 'confirmAbandon' }; renderModal(); },

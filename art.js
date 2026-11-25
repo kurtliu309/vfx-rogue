@@ -604,15 +604,20 @@
 
   /* ---------------- sim viewer (live solver) 160x90 ---------------- */
   function drawSim(ctx, sims, t) {
-    // sims: [{el, f, detail, inst, diverged, done}] — draws all active sims overlaid
+    // sims: [{el, f, detail, inst, band, diverged, done}] — draws all active sims overlaid.
+    // The instability number is hidden from the player; the picture gets
+    // twitchy and warmer as the band moves steady → warn → danger.
     const W = 160, H = 90;
-    rect(ctx, 0, 0, W, H, '#10131c');
-    for (let x = 0; x < W; x += 10) rect(ctx, x, 0, 1, H, '#161a26');
-    for (let y = 0; y < H; y += 10) rect(ctx, 0, y, W, 1, '#161a26');
+    const worst = sims.some(s => s.band === 'danger') ? 'danger' : (sims.some(s => s.band === 'warn') ? 'warn' : 'steady');
+    const bg = worst === 'danger' ? '#1c0e14' : (worst === 'warn' ? '#17131a' : '#10131c');
+    rect(ctx, 0, 0, W, H, bg);
+    for (let x = 0; x < W; x += 10) rect(ctx, x, 0, 1, H, worst === 'danger' ? '#2a1620' : '#161a26');
+    for (let y = 0; y < H; y += 10) rect(ctx, 0, y, W, 1, worst === 'danger' ? '#2a1620' : '#161a26');
     sims.forEach((s, si) => {
       const ox = (si + 0.5) * (W / sims.length);
       const d = s.detail / 30;
-      const jitter = s.inst / 100;
+      const band = s.diverged ? 'danger' : (s.band || 'steady');
+      const jitter = band === 'danger' ? 1.0 : (band === 'warn' ? 0.65 : 0.3);
       const n = Math.floor(20 + s.detail * 1.6);
       const col = { fire: ['#fff3a0', '#ffd84a', '#ff8a2e', '#c8381c'], water: ['#ffffff', '#8ad8ff', '#3a9ae8', '#1a5aa8'], destr: ['#e8dcc8', '#c4b49a', '#8a7a6a', '#5a4a3a'], creature: ['#ffd0e8', '#ff7ab8', '#c83a78', '#7a1a48'], magic: ['#ffffff', '#d8c0ff', '#b98cff', '#5ee0ff'] }[s.el] || ['#fff', '#ccc', '#888', '#444'];
       for (let i = 0; i < n; i++) {
@@ -627,6 +632,15 @@
       }
       if (s.diverged) { for (let i = 0; i < 40; i++) rect(ctx, ox - 30 + hrand(i + t) * 60, hrand(i * 3 + t) * H, 2 + hrand(i) * 10, 1, ['#ff00ff', '#00ffff', '#ffffff'][i % 3]); text(ctx, 'NAN', ox - 6, 40, '#ff3a5a'); }
       else if (s.done) { text(ctx, 'CACHED', ox - 12, 10, '#5ed38a'); }
+      else if (band === 'danger') {
+        // warning colour wash + horizontal tearing as the sim gets close to blowing up
+        ctx.fillStyle = 'rgba(255,48,72,' + (0.07 + 0.05 * Math.sin(t / 110)) + ')';
+        ctx.fillRect(ox - W / sims.length / 2, 0, W / sims.length, H);
+        for (let i = 0; i < 3; i++) rect(ctx, ox - 32, (hrand(i + Math.floor(t / 90)) * H) | 0, 64, 1, '#ff3a5a');
+      } else if (band === 'warn') {
+        ctx.fillStyle = 'rgba(255,184,60,0.05)';
+        ctx.fillRect(ox - W / sims.length / 2, 0, W / sims.length, H);
+      }
     });
     text(ctx, 'SIM', 3, 3, '#5a6378');
   }

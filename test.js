@@ -618,6 +618,106 @@ test('disk failure event hurts hours and a quality tier, never deletes cards', (
   assert.ok(g.cards.some(c => !basics.includes(c.type) && (c.q || 1) === 1), 'one non-basic card dropped to Q1');
 });
 
+test('sim: spikes get more likely with frame; detail growth decays late', () => {
+  assert.ok(V.simSpikeChance(1) < V.simSpikeChance(20));
+  assert.ok(V.simSpikeChance(20) < V.simSpikeChance(40));
+  const p = V.simParams(V.makeCard('pyro'), {});
+  const rng = () => 0.5; // deterministic, no spike at these frames
+  const early = V.simInit(p, 1); V.simStep(early, rng);
+  const late = V.simInit(p, 1); late.f = 40; V.simStep(late, rng);
+  assert.ok(late.detail < early.detail, 'frame 41 must add less detail than frame 1');
+});
+
+test('sim bands: three levels, and each sim shifts the edges', () => {
+  assert.strictEqual(V.simBand(10, 0), 'steady');
+  assert.strictEqual(V.simBand(50, 0), 'warn');
+  assert.strictEqual(V.simBand(80, 0), 'danger');
+  assert.strictEqual(V.simBand(75, 12), 'warn', 'late danger edge');
+  assert.strictEqual(V.simBand(60, -12), 'danger', 'early danger edge');
+  const p = V.simParams(V.makeCard('pyro'), {});
+  const shifts = new Set();
+  for (let s = 0; s < 40; s++) shifts.add(V.simInit(p, s).bandShift);
+  assert.ok(shifts.size > 5, 'band shift varies per sim');
+});
+
+test('notes: easy client rounds up the invoice; pincher offers a real choice', () => {
+  const rng = V.mulberry32(1);
+  const b = brief('fire', 1, ['lit']);
+  b.kind = 'gig'; b.client = 'rumble';
+  const n = V.notesFor(b, { pass: true, missing: [], grade: 'S' }, 0, rng);
+  assert.strictEqual(n.persona, 'easy');
+  assert.strictEqual(b.payBoost, 1.2);
+  assert.ok(n.lines.length > 0);
+
+  // …and the boost really lands in the invoice.
+  const g = newJobGame('pyro');
+  g.chooseJob('gig', 0);
+  g.job.brief = { kind: 'gig', client: 'rumble', hero: 'fire', minStars: 1, reqs: [{ id: 'lit' }], revealed: [], pay: 1000, nda: false };
+  g.place(uidOf(g, 'box'), 0, 0); g.place(uidOf(g, 'pyrosrc'), 0, 1); g.place(uidOf(g, 'light'), 0, 2);
+  assert.ok(g.commitCook({}).ok);
+  const gr = V.gradeShot(g.job.brief, g.job.last.stream, g.relicSet());
+  assert.ok(gr.pass);
+  assert.strictEqual(g.job.brief.payBoost, 1.2);
+  const expected = Math.round(1000 * V.CONFIG.gradeMult[gr.grade] * 1.2 / 10) * 10;
+  assert.strictEqual(g.deliver().pay, expected);
+
+  const b2 = brief('fire', 1, ['lit']);
+  b2.kind = 'gig'; b2.client = 'oldpine';
+  const n2 = V.notesFor(b2, { pass: true, missing: [], grade: 'B' }, 0, rng);
+  assert.strictEqual(n2.persona, 'pincher');
+  assert.ok(n2.choice && n2.choice.options.length === 2);
+  assert.strictEqual(b2.twisted, true);
+});
+
+test('pincher: choosing the hours cut applies it and blocks delivery until answered', () => {
+  const g = newJobGame('pyro');
+  g.chooseJob('gig', 0);
+  g.job.brief = { kind: 'gig', client: 'oldpine', hero: 'fire', minStars: 1, reqs: [{ id: 'lit' }], revealed: [], pay: 900 };
+  g.place(uidOf(g, 'box'), 0, 0); g.place(uidOf(g, 'light'), 0, 1);
+  assert.ok(g.commitCook({}).ok);
+  assert.ok(g.job.pendingNote, 'pincher must leave a pending choice');
+  assert.strictEqual(g.canDeliver(), false, 'delivery waits for the answer');
+  const before = g.job.hoursLeft;
+  assert.ok(g.resolveNote('hours').ok);
+  assert.strictEqual(g.job.hoursLeft, Math.round(before * 0.8));
+  assert.strictEqual(g.job.pendingNote, null);
+  assert.strictEqual(g.canDeliver(), true);
+  // the pay branch is the other option
+  g.job.brief = { kind: 'gig', client: 'oldpine', hero: 'fire', minStars: 1, reqs: [{ id: 'lit' }], revealed: [], pay: 900 };
+  g.job.pendingNote = { kind: 'pincher', defaultKey: 'pay', options: [{ key: 'hours' }, { key: 'pay' }] };
+  g.resolveNote('pay');
+  assert.strictEqual(g.job.brief.payMulNote, 0.8);
+  // headless callers that ignore the choice get the safe default (keep hours)
+  g.job.brief = { kind: 'gig', client: 'oldpine', hero: 'fire', minStars: 1, reqs: [{ id: 'lit' }], revealed: [], pay: 900 };
+  g.job.pendingNote = { kind: 'pincher', defaultKey: 'pay', options: [{ key: 'hours' }, { key: 'pay' }] };
+  g.prepareCook();
+  assert.strictEqual(g.job.pendingNote, null, 'cooking falls back to the default');
+  assert.strictEqual(g.job.brief.payMulNote, 0.8);
+});
+
+test('flipper: payMul 1.6 and the new hero is the deck\'s second-strongest element', () => {
+  assert.strictEqual(V.CLIENTS.fizzco.payMul, 1.6);
+  const cards = ['box', 'pyrosrc', 'pyro', 'turb', 'flipsrc', 'flip', 'light', 'comp', 'merge'].map(id => V.makeCard(id));
+  const caps = V.deckCapabilities(cards, { cols: 8, rows: 3, ram: 64 }, []);
+  assert.ok(caps.maxStars.fire > caps.maxStars.water, 'fire is the strongest chain');
+  const gig = { kind: 'gig', client: 'fizzco', hero: 'fire', minStars: 2, reqs: [{ id: 'lit' }], revealed: [] };
+  assert.strictEqual(V.flipTargetFor(caps, gig, V.mulberry32(5)), 'water');
+  // the note uses that precomputed target instead of rolling a random element
+  Object.assign(gig, { flipTo: 'water' });
+  V.notesFor(gig, { pass: true, missing: [], grade: 'B' }, 0, V.mulberry32(5));
+  assert.strictEqual(gig.hero, 'water');
+});
+
+test('secret: hidden requirements are drawn only from what the deck can satisfy', () => {
+  const cards = ['box', 'shader', 'light', 'comp', 'merge', 'terrain', 'toon', 'lens'].map(id => V.makeCard(id));
+  const caps = V.deckCapabilities(cards, { cols: 8, rows: 4, ram: 64 }, []);
+  for (let seed = 1; seed <= 30; seed++) {
+    const gig = V.genGig(V.mulberry32(seed), 5, 'vale', 'pyro', caps);
+    assert.ok(gig.hidden, 'secret gig has a hidden requirement');
+    assert.ok(caps.reqs[gig.hidden.id], 'hidden ' + gig.hidden.id + ' must be satisfiable (seed ' + seed + ')');
+  }
+});
+
 test('i18n: en/zh UI tables have identical, non-empty keys', () => {
   const en = Object.keys(V.I18N.en).sort(), zh = Object.keys(V.I18N.zh).sort();
   assert.deepStrictEqual(en, zh);
@@ -636,7 +736,7 @@ test('i18n: every node, relic, client, element, requirement is bilingual', () =>
 });
 
 test('every error key the engine can return exists in the UI tables', () => {
-  const keys = ['err.noInput', 'err.deadInput', 'err.needGeo', 'err.needStep', 'err.needOrganic', 'err.needFire', 'err.needLit', 'err.needPlate', 'err.oom', 'err.hours', 'err.noDailies', 'err.empty', 'err.cash', 'err.farmMax', 'err.gate', 'err.hdaOrder',
+  const keys = ['err.noInput', 'err.deadInput', 'err.needGeo', 'err.needStep', 'err.needOrganic', 'err.needFire', 'err.needLit', 'err.needPlate', 'err.oom', 'err.hours', 'err.noDailies', 'err.noteChoice', 'err.empty', 'err.cash', 'err.farmMax', 'err.gate', 'err.hdaOrder',
     'fail.model', 'fail.surf', 'fail.char', 'fail.fx', 'fail.light', 'fail.comp', 'gate.count', 'gate.distinct', 'gate.top'];
   for (const k of keys) assert.ok(V.I18N.en[k], 'missing ' + k);
 });
