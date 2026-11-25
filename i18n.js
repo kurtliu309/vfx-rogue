@@ -103,7 +103,7 @@
       'work.abandonQ': 'Walk away from this job? You get nothing, but the week moves on.',
       'work.confirmDeliver': 'Deliver now? You can\'t change it after.',
       'work.lastDaily': 'Out of dailies — deliver what you have.',
-      'work.tierTip': 'Quality tier: more stars/polish, more hours & RAM, risk of failure.',
+      'work.tierTip': 'Quality tier: more stars/polish, more hours & RAM. A failed roll is a weaker take (−0.5★ or −1 polish) — never a broken chain.',
       'work.tutorial1': 'Mira: “Put a Box in the first cell. Then your hero source next to it.”',
       'work.tutorial2': 'Mira: “Now a solver, then a Light at the end so it renders.”',
       'work.tutorial3': 'Mira: “Hit COOK. Read the notes. Then DELIVER.”',
@@ -141,7 +141,7 @@
       'res.fail.surf': 'VRAM overflow — textures dropped',
       'res.fail.char': 'Rig flipped',
       'res.fail.fx': 'Cache corrupted',
-      'res.fail.light': 'Fireflies! −2 polish',
+      'res.fail.light': 'Fireflies! −1 polish',
       'res.fail.comp': 'Over-processed',
       'res.pip': 'Pip hit Ctrl+Z. A failure was undone.',
       'res.oom': 'Out of memory! Row {r} crashed.',
@@ -203,7 +203,7 @@
       'relics.none': 'None yet.',
 
       'help.title': 'How to play',
-      'help.body': '• Each week: read mail, pick ONE job, build a node network, cook, deliver. Sunday: pay rent. Can\'t pay → evicted.\n• Data flows left → right. Empty cells are wires. Each row\'s right end goes to OUT; your shot is the best row.\n• Every shot has a HERO element (fire, water, destruction, creature, magic). Each node in that element\'s chain adds ★1. Chains have dependencies: Turbulence needs a Pyro Solver, Rig needs Sculpt, etc.\n• Pipeline caps: unlit = ★2 max (playblast). Lit but no comp = ★3.5. Comp\'d final = up to ★5. Basic Light and Basic Comp are enough.\n• Requirements are pass/fail checklists. Polish (Grade, Three-Point, look-dev matches, quality tiers) raises the grade C→B→A→S and the pay.\n• COOK = one round of dailies. The client replies with notes — sometimes they move the goalposts. Nodes you did not change stay cached and cost 0h.\n• SOLVERS run live: detail climbs, instability climbs. Hit CACHE before 100% or the sim diverges (NaN). Collision next to a solver steadies it. Roto Rescue can save a dead sim.\n• Hardware: CPU = more columns, GPU = more rows, RAM = how much one column can hold. Rent the farm for hours when you\'re desperate.\n• Weeks 4, 8, 12 are studio tests. Your reel must meet their bar. Week 12 is Halcyon — the dream.',
+      'help.body': '• Each week: read mail, pick ONE job, build a node network, cook, deliver. Sunday: pay rent. Can\'t pay → evicted.\n• Data flows left → right. Empty cells are wires. Each row\'s right end goes to OUT; your shot is the best row.\n• Every shot has a HERO element (fire, water, destruction, creature, magic). Each node in that element\'s chain adds ★1. Chains have dependencies: Turbulence needs a Pyro Solver, Rig needs Sculpt, etc.\n• Pipeline caps: unlit = ★2 max (playblast). Lit but no comp = ★3.5. Comp\'d final = up to ★5. Basic Light and Basic Comp are enough.\n• Requirements are pass/fail checklists. Polish raises the grade C→B→A→S (thresholds 3/6/9 points) and the pay. The same polish source counts once: two Grades give one Grade\'s polish; quality-tier polish still counts per node. Polish is worth full points up to 3; beyond that each point counts half for the letter grade (it still satisfies “polish ≥ N”).\n• Environment only counts when a separate Terrain row is Merged into your shot row — Terrain as the main row\'s own source does not. Needing Environment and Plate together means 3 rows.\n• Quality tiers are a gamble, not a cliff: a failed roll keeps the node\'s function but loses the tier bonus (−0.5★ on a chain step, −1 polish on support/light/comp). Solvers are always zero-risk; their quality only speeds up detail.\n• COOK = one round of dailies. The client replies with notes — sometimes they move the goalposts. Nodes you did not change stay cached and cost 0h.\n• SOLVERS run live: detail climbs, instability climbs. Hit CACHE before 100% or the sim diverges (NaN). Collision next to a solver steadies it. Roto Rescue can save a dead sim.\n• Hardware: CPU = more columns, GPU = more rows, RAM = how much one column can hold. Heavy FX (FLIP, Upres, Mesher) and high quality tiers need RAM. Rent the farm for hours when you\'re desperate.\n• Weeks 4, 8, 12 are studio tests. Your reel must meet their bar. Week 12 is Halcyon — the dream.',
       'help.close': 'Got it',
 
       'err.noInput': 'No input — nothing flows into this node.',
@@ -343,7 +343,7 @@
       'work.abandonQ': '放弃这个活？拿不到钱，但这周会过去。',
       'work.confirmDeliver': '现在交付？交了就不能改了。',
       'work.lastDaily': 'Dailies 用完了——交现有的吧。',
-      'work.tierTip': '质量档：更多星/打磨，更多工时和内存，有失败风险。',
+      'work.tierTip': '质量档：更多星/打磨，更多工时和内存。失败只是效果降一档（−0.5★ 或 −1 打磨），不会断链。',
       'work.tutorial1': 'Mira：“第一格放个 Box。旁边放你的主角源。”',
       'work.tutorial2': 'Mira：“接一个解算器，最后放一盏灯，这样才会渲染。”',
       'work.tutorial3': 'Mira：“点 COOK，看意见，然后交付。”',
@@ -381,7 +381,7 @@
       'res.fail.surf': '显存溢出——贴图丢了',
       'res.fail.char': '绑定翻转了',
       'res.fail.fx': '缓存损坏',
-      'res.fail.light': '萤火虫噪点！−2 打磨',
+      'res.fail.light': '萤火虫噪点！−1 打磨',
       'res.fail.comp': '处理过度',
       'res.pip': 'Pip 踩到了 Ctrl+Z，一次失败被撤销了。',
       'res.oom': '内存不足！第 {r} 行崩溃了。',
@@ -443,7 +443,7 @@
       'relics.none': '还没有。',
 
       'help.title': '玩法说明',
-      'help.body': '• 每周：看邮件，只接一个活，搭节点网络，Cook，交付。周日交房租。交不起 → 被赶出门。\n• 数据从左往右流。空格子就是导线。每行最右端进输出口；你的镜头是最好的那一行。\n• 每个镜头有一个主角元素（火、水、破碎、生物、魔法）。这个元素链上每多一个节点 +★1。链有依赖：Turbulence 要先有 Pyro 解算，绑定要先有 Sculpt，等等。\n• 管线上限：没打光最高 ★2（playblast）；打了光没合成最高 ★3.5；合成成片最高 ★5。基础灯光和基础合成就够用。\n• 要求是过/不过的清单。打磨（Grade、三点光、材质对口、质量档）提高评级 C→B→A→S 和报酬。\n• COOK = 一轮 dailies。客户会回 note——有时还会改需求。没改动的节点保留缓存，0 工时。\n• 解算器实时运行：细节涨，不稳定度也涨。到 100% 前按缓存，否则发散（NaN）。解算器旁边放碰撞体会更稳。Roto 救场能救回炸掉的解算。\n• 硬件：CPU = 更多列，GPU = 更多行，内存 = 一列能放多重。走投无路就租农场买工时。\n• 第 4、8、12 周是工作室测试，你的 reel 要达到门槛。第 12 周是 Halcyon——梦想。',
+      'help.body': '• 每周：看邮件，只接一个活，搭节点网络，Cook，交付。周日交房租。交不起 → 被赶出门。\n• 数据从左往右流。空格子就是导线。每行最右端进输出口；你的镜头是最好的那一行。\n• 每个镜头有一个主角元素（火、水、破碎、生物、魔法）。这个元素链上每多一个节点 +★1。链有依赖：Turbulence 要先有 Pyro 解算，绑定要先有 Sculpt，等等。\n• 管线上限：没打光最高 ★2（playblast）；打了光没合成最高 ★3.5；合成成片最高 ★5。基础灯光和基础合成就够用。\n• 要求是过/不过的清单。打磨提高评级 C→B→A→S（门槛 3/6/9 分）和报酬。同一种打磨来源只算一次：两个 Grade 只给一个 Grade 的打磨；质量档打磨仍按节点计。打磨前 3 点算满分，之后再多的点对评级只算一半（但仍能满足“打磨 ≥ N”要求）。\n• “有环境”必须用 Terrain 另起一行再 Merge 进取分的那一行；Terrain 直接当主行的源不算。环境 + 实拍同时出现时，需要 3 行。\n• 质量档是风险/回报，不是悬崖：失败时节点功能保留，只是拿不到质量加成（链节点 −0.5★，配套/灯光/合成 −1 打磨）。解算器永远零风险，质量档只加快细节增长。\n• COOK = 一轮 dailies。客户会回 note——有时还会改需求。没改动的节点保留缓存，0 工时。\n• 解算器实时运行：细节涨，不稳定度也涨。到 100% 前按缓存，否则发散（NaN）。解算器旁边放碰撞体会更稳。Roto 救场能救回炸掉的解算。\n• 硬件：CPU = 更多列，GPU = 更多行，内存 = 一列能放多重。FLIP、Upres、Mesher 等重 FX 和高质量档都吃内存。走投无路就租农场买工时。\n• 第 4、8、12 周是工作室测试，你的 reel 要达到门槛。第 12 周是 Halcyon——梦想。',
       'help.close': '明白了',
 
       'err.noInput': '没有输入——没有数据流进这个节点。',

@@ -75,11 +75,12 @@
     startRows: 2, maxRows: 4,
     startRam: 24, ramStep: 12, maxRam: 72,
     farmHours: 4, farmBasePrice: 90, farmPriceStep: 40,
-    risk: [0, 0, 0.15, 0.3],
+    risk: [0, 0, 0.12, 0.25],
     qualityHours: 1,
     capUnlit: 2, capNoComp: 3.5, maxStars: 5,
-    gradeMult: { C: 1, B: 1.25, A: 1.6, S: 2.1 },
-    gradePts: { B: 2, A: 4, S: 6 },
+    gradeMult: { C: 0.85, B: 1.1, A: 1.5, S: 2.1 },
+    gradePts: { B: 3, A: 6, S: 9 },
+    polishSoftCap: 3, polishSoftRate: 0.5,
     killFee: 0.15,
     solver: {
       frames: 48, detailRate: 2.6, instBase: 1.0, instAccel: 0.08,
@@ -88,8 +89,8 @@
     },
     shop: {
       courseMin: 90, courseMax: 210, courseCount: 4,
-      practice: 110, cpu: [380, 520, 700], gpu: [480, 720], ram: 240,
-      coffee: 45, relicCount: 2, relicMin: 220, relicMax: 360, hda: 160
+      practice: 110, cpu: [380, 520, 700], gpu: [320, 480], ram: 160,
+      coffee: 45, relicCount: 2, relicMin: 220, relicMax: 360, hda: 220
     },
     gigPay: { base: 420, perWeek: 75 },
     farmMaxPerJob: 3
@@ -124,11 +125,11 @@
     final:    { name: loc('Comp\'d final', '合成成片'), hint: loc('Finish with a Comp node after Lighting.', '灯光之后接一个合成节点收尾。'), test: s => !!s.final },
     plate:    { name: loc('On the plate', '合进实拍'), hint: loc('Merge a Plate row into your CG row, then Plate Integrate.', '用 Merge 把实拍行并进 CG 行，再接 Plate Integrate。'), test: s => !!s.onPlate },
     night:    { name: loc('Night shot', '夜景'), hint: loc('Light it with Moonlight.', '用 Moonlight 打光。'), test: s => !!s.night },
-    env:      { name: loc('Environment', '有环境'), hint: loc('Start a row with Terrain and merge it in.', '用 Terrain 起一行再 Merge 进来。'), test: s => !!s.env },
+    env:      { name: loc('Environment', '有环境'), hint: loc('Start a separate row with Terrain and Merge it into the main row. Terrain as the main row\'s own source does not count.', '用 Terrain 另起一行，再 Merge 进主行。Terrain 直接当主行的源不算。'), test: s => !!s.envMerged },
     stylized: { name: loc('Stylized look', '风格化'), hint: loc('Toon Shader gives the stylized look.', 'Toon Shader 给风格化外观。'), test: s => !!s.stylized },
     grain:    { name: loc('Matched grain', '匹配颗粒'), hint: loc('Lens & Grain in comp.', '合成里加 Lens & Grain。'), test: s => !!s.grain },
     smoke:    { name: loc('Smoke / dust', '烟尘'), hint: loc('Dust Pass adds smoke to any stream; Dust (after Debris) or Pyro Turbulence also work.', '烟尘层可以给任何数据流加烟；Dust（接在 Debris 后）或 Turbulence 也行。'), test: s => !!s.smoke },
-    polish:   { name: loc('Polish ≥ {n}', '打磨 ≥ {n}'), hint: loc('Grade, Three-Point, look-dev matches and quality tiers add polish.', 'Grade、三点光、材质对口和质量档都加打磨。'), test: (s, n) => (s.polish || 0) >= n }
+    polish:   { name: loc('Polish ≥ {n}', '打磨 ≥ {n}'), hint: loc('Grade, Three-Point, look-dev matches and quality tiers add polish. The same source counts once; quality tiers count per node.', 'Grade、三点光、材质对口和质量档都加打磨。同一种来源只算一次；质量档按节点计。'), test: (s, n) => (s.polish || 0) >= n }
   };
 
   /* ================================================================
@@ -136,10 +137,11 @@
    * ================================================================ */
   function newStream() {
     return {
-      geo: false, organic: false, hard: false, env: false, scanned: false, plate: false,
+      geo: false, organic: false, hard: false, env: false, envMerged: false, scanned: false, plate: false,
       tex: false, texMatch: false, stylized: false, rig: false, anim: false,
       lit: false, night: false, final: false, onPlate: false, grain: false, smoke: false,
-      polish: 0, dead: false, deadEl: null, deadStep: 0,
+      polish: 0, polishSrc: {}, usdMerged: false, gradeStar: false,
+      dead: false, deadEl: null, deadStep: 0,
       step: { fire: 0, water: 0, destr: 0, creature: 0, magic: 0 },
       bonus: { fire: 0, water: 0, destr: 0, creature: 0, magic: 0 },
       depts: [], model: null, log: [], rows: 1
@@ -151,10 +153,27 @@
     n.bonus = Object.assign({}, s.bonus);
     n.depts = s.depts.slice();
     n.log = s.log.slice();
+    n.polishSrc = Object.assign({}, s.polishSrc || {});
     return n;
   }
   function addDept(s, d) { if (!s.depts.includes(d)) s.depts.push(d); }
-  const tierPolish = (ctx) => (ctx.fail ? 0 : Math.max(0, (ctx.card.q || 1) - 1));
+  /* Polish diminishing returns: one contribution per polish *source*.
+   * Same node type = same source (two Grades count once). Quality-tier polish
+   * is passed a per-cell key, so each graded node still counts separately. */
+  function addPolish(s, key, amt) {
+    if (!amt) return 0;
+    if (key == null) { s.polish += amt; return amt; }
+    if (!s.polishSrc) s.polishSrc = {};
+    if (s.polishSrc[key]) return 0;
+    s.polishSrc[key] = 1;
+    s.polish += amt;
+    return amt;
+  }
+  function losePolish(s, amt) { s.polish = Math.max(0, s.polish - amt); }
+  // Quality-tier polish counts once per node (exempt from the one-per-source
+  // rule) but only half a point per tier: stacking tiers is a star/detail play,
+  // not a polish pump.
+  const tierPolish = (ctx) => (ctx.fail ? 0 : 0.5 * Math.max(0, (ctx.card.q || 1) - 1));
   const tierStars = (ctx) => (ctx.fail ? 0 : 0.5 * Math.max(0, (ctx.card.q || 1) - 1));
 
   function heroStep(el, step, extra) {
@@ -170,9 +189,17 @@
         return null;
       },
       apply(s, ctx) {
-        if (ctx.fail) { s.log.push('fail.' + ctx.def.dept); return; }
-        s.step[el] = Math.max(s.step[el], step);
-        s.bonus[el] += tierStars(ctx);
+        if (ctx.fail) {
+          // A failed quality roll is a weaker take, not a broken chain: the step
+          // still counts (and its function — smoke, anim, rig — is kept), but it
+          // loses the tier bonus and half a star.
+          s.log.push('fail.' + ctx.def.dept);
+          s.step[el] = Math.max(s.step[el], step);
+          s.bonus[el] -= 0.5;
+        } else {
+          s.step[el] = Math.max(s.step[el], step);
+          s.bonus[el] += tierStars(ctx);
+        }
         if (extra && extra.apply) extra.apply(s, ctx);
       },
       hero: { el, step }
@@ -203,19 +230,19 @@
   // --- MODEL (sources) ---
   def('box', { dept: 'model', h: 1, ram: 2, q: true, source: true,
     name: loc('Box', '盒子'), desc: loc('Basic geometry. Starts a stream.', '基础几何体，起一条数据流。'),
-    apply(s, ctx) { s.geo = true; s.model = 'box'; s.polish += tierPolish(ctx); } });
+    apply(s, ctx) { s.geo = true; s.model = 'box'; if (ctx.fail) s.log.push('fail.model'); addPolish(s, 'q:' + ctx.key, tierPolish(ctx)); } });
   def('sculpt', { dept: 'model', h: 2, ram: 6, q: true, source: true,
     name: loc('Sculpt', '雕刻'), desc: loc('Organic geo. Creatures need it. Pairs with Skin Shader.', '有机模型。生物需要它；和 Skin Shader 对口。'),
-    apply(s, ctx) { s.geo = true; s.organic = true; s.model = 'organic'; s.polish += tierPolish(ctx); } });
+    apply(s, ctx) { s.geo = true; s.organic = true; s.model = 'organic'; if (ctx.fail) s.log.push('fail.model'); addPolish(s, 'q:' + ctx.key, tierPolish(ctx)); } });
   def('hardsurf', { dept: 'model', h: 2, ram: 4, q: true, source: true,
     name: loc('Hard Surface', '硬表面'), desc: loc('Hard-surface geo. Fracture +0.5★. Pairs with Metal Shader.', '硬表面模型。Fracture +0.5★；和 Metal Shader 对口。'),
-    apply(s, ctx) { s.geo = true; s.hard = true; s.model = 'hard'; s.polish += tierPolish(ctx); } });
+    apply(s, ctx) { s.geo = true; s.hard = true; s.model = 'hard'; if (ctx.fail) s.log.push('fail.model'); addPolish(s, 'q:' + ctx.key, tierPolish(ctx)); } });
   def('terrain', { dept: 'model', h: 2, ram: 6, q: true, source: true,
-    name: loc('Terrain', '地形'), desc: loc('Environment geo. Satisfies “Environment”. Pairs with Texture Paint.', '环境模型，满足“有环境”；和 Texture Paint 对口。'),
-    apply(s, ctx) { s.geo = true; s.env = true; s.model = 'env'; s.polish += tierPolish(ctx); } });
+    name: loc('Terrain', '地形'), desc: loc('Environment geo. Merge it in from a side row to satisfy “Environment”. Pairs with Texture Paint.', '环境模型。从另一行 Merge 进来才能满足“有环境”；和 Texture Paint 对口。'),
+    apply(s, ctx) { s.geo = true; s.env = true; s.envMerged = false; s.model = 'env'; if (ctx.fail) s.log.push('fail.model'); addPolish(s, 'q:' + ctx.key, tierPolish(ctx)); } });
   def('scan', { dept: 'model', h: 3, ram: 8, q: true, source: true,
     name: loc('Photo Scan', '扫描模型'), desc: loc('Scanned asset: comes textured, +1 polish. Heavy.', '扫描资产：自带材质，+1 打磨。很吃内存。'),
-    apply(s, ctx) { s.geo = true; s.scanned = true; s.tex = true; s.hard = true; s.model = 'scan'; s.polish += 1 + tierPolish(ctx); } });
+    apply(s, ctx) { s.geo = true; s.scanned = true; s.tex = true; s.hard = true; s.model = 'scan'; s.polish += 1; if (ctx.fail) s.log.push('fail.model'); addPolish(s, 'q:' + ctx.key, tierPolish(ctx)); } });
   def('plate', { dept: 'plate', h: 0, ram: 2, source: true,
     name: loc('Plate', '实拍素材'), desc: loc('Live-action footage. Merge it into a CG row.', '实拍画面。用 Merge 并进 CG 行。'),
     apply(s) { s.plate = true; s.model = s.model || null; } });
@@ -226,31 +253,43 @@
     o.check = s => (!s.geo ? 'err.needGeo' : null);
     const extra = o.extra;
     o.apply = function (s, ctx) {
-      if (ctx.fail) { s.log.push('fail.surf'); return; }
+      if (ctx.fail) {
+        // Textures dropped, but the stream is still textured and the look's
+        // functional traits (Toon stylized, etc.) stay: weaker take, no match
+        // polish, no tier polish, −1 polish.
+        s.log.push('fail.surf');
+        s.tex = true;
+        losePolish(s, 1);
+        if (extra) extra(s, ctx);
+        return;
+      }
       s.tex = true;
-      s.polish += tierPolish(ctx);
+      addPolish(s, 'q:' + ctx.key, tierPolish(ctx));
       const m = o.match(s);
-      if (m === true) { s.texMatch = true; s.polish += 1 + (ctx.relics.has('lookdev') ? 1 : 0); }
-      else if (m === false) s.polish -= 1;
+      if (m === true) {
+        s.texMatch = true;
+        addPolish(s, 'match:' + id, (o.matchPolish || 1) + (ctx.relics.has('lookdev') ? 1 : 0));
+      } else if (m === false) addPolish(s, 'mismatch:' + id, -1);
       if (extra) extra(s, ctx);
     };
     return def(id, o);
   }
-  surf('shader', { h: 1, ram: 2, name: loc('Basic Shader', '基础材质'), desc: loc('Textures the stream. No look-dev match.', '给数据流上材质，不算对口。'), match: () => null });
-  surf('paint', { h: 2, ram: 4, name: loc('Texture Paint', '手绘贴图'), desc: loc('Match: Terrain or Sculpt (+1 polish). Box: neutral.', '对口：Terrain 或 Sculpt（+1 打磨）。'), match: s => (s.env || s.organic) ? true : (s.hard ? false : null) });
-  surf('skin', { h: 2, ram: 4, name: loc('Skin Shader', '皮肤材质'), desc: loc('SSS skin. Match: Sculpt (+1 polish). Mismatch -1.', 'SSS 皮肤。对口 Sculpt（+1 打磨），不对口 -1。'), match: s => s.organic ? true : false });
-  surf('metal', { h: 2, ram: 4, name: loc('Metal Shader', '金属材质'), desc: loc('Match: Hard Surface / Scan (+1 polish). Mismatch -1.', '对口：硬表面 / 扫描（+1 打磨），不对口 -1。'), match: s => s.hard ? true : false });
-  surf('toon', { h: 1, ram: 2, name: loc('Toon Shader', '卡通材质'), desc: loc('Stylized look. Always a match, but never “realistic”.', '风格化外观。总算对口。'), match: () => true, extra: s => { s.stylized = true; } });
+  surf('shader', { h: 0, ram: 2, name: loc('Basic Shader', '基础材质'), desc: loc('Free (0h) texture. No look-dev match.', '免费（0 工时）上材质，不算对口。'), match: () => null });
+  surf('paint', { h: 2, ram: 4, name: loc('Texture Paint', '手绘贴图'), desc: loc('Big match: Terrain or Sculpt (+2 polish). Hard surface: mismatch −1.', '大口对：Terrain 或 Sculpt（+2 打磨）。硬表面不对口 −1。'), matchPolish: 2, match: s => (s.env || s.organic) ? true : (s.hard ? false : null) });
+  surf('skin', { h: 2, ram: 4, name: loc('Skin Shader', '皮肤材质'), desc: loc('SSS skin. Match: Sculpt (+1 polish, creature +0.5★). Mismatch −1.', 'SSS 皮肤。对口 Sculpt（+1 打磨，生物 +0.5★），不对口 −1。'), match: s => s.organic ? true : false,
+    extra: (s, ctx) => { if (s.organic && !ctx.fail) s.bonus.creature += 0.5; } });
+  surf('metal', { h: 2, ram: 4, name: loc('Metal Shader', '金属材质'), desc: loc('Big match: Hard Surface / Scan (+2 polish). Mismatch −1.', '大口对：硬表面 / 扫描（+2 打磨），不对口 −1。'), matchPolish: 2, match: s => s.hard ? true : false });
+  surf('toon', { h: 1, ram: 2, name: loc('Toon Shader', '卡通材质'), desc: loc('Stylized look. Always a match (+1 polish), but never “realistic”.', '风格化外观。总算对口（+1 打磨），但永远不写实。'), match: () => true, extra: s => { s.stylized = true; } });
 
   // --- RIG / ANIM (creature chain) ---
   def('rig', Object.assign({ dept: 'char', h: 2, ram: 3, q: true,
     name: loc('Rig', '绑定'), desc: loc('Creature ★1. Needs Sculpt geo.', '生物 ★1。需要 Sculpt 模型。') },
   heroStep('creature', 1, { needs: s => s.organic, needsErr: 'err.needOrganic', apply: s => { s.rig = true; } })));
   def('animate', Object.assign({ dept: 'char', h: 3, ram: 3, q: true,
-    name: loc('Animate', '动画'), desc: loc('Creature ★2. Animated input gives any later FX solver +0.5★.', '生物 ★2。之后的 FX 解算器吃到动画 +0.5★。') },
-  heroStep('creature', 2, { apply: s => { s.anim = true; } })));
+    name: loc('Animate', '动画'), desc: loc('Creature ★2.5: +0.5★ over a plain step, and animated input gives later FX solvers +0.5★. Can be graded.', '生物 ★2.5：比普通一步多 +0.5★，且之后的 FX 解算器吃到动画 +0.5★。可以上质量档。') },
+  heroStep('creature', 2, { apply: s => { s.anim = true; s.bonus.creature += 0.5; } })));
   def('mocap', Object.assign({ dept: 'char', h: 2, ram: 2,
-    name: loc('Mocap Cleanup', '动捕清理'), desc: loc('Creature ★2, no risk, no tiers. Cheap and steady.', '生物 ★2，零风险但没有质量档。') },
+    name: loc('Mocap Cleanup', '动捕清理'), desc: loc('Creature ★2, no risk, no tiers. 1h cheaper than Animate. Cheap and steady.', '生物 ★2，零风险没有质量档，比 Animate 便宜 1 小时。便宜稳妥。') },
   heroStep('creature', 2, { apply: s => { s.anim = true; } })));
   def('muscle', Object.assign({ dept: 'char', h: 2, ram: 4, q: true,
     name: loc('Muscle Jiggle', '肌肉抖动'), desc: loc('Creature ★3 — the safe alternative to Vellum.', '生物 ★3——Vellum 的稳妥替代。') },
@@ -269,16 +308,16 @@
     name: loc('Pyro Solver', 'Pyro 解算'), desc: loc('SOLVER. Fire ★2 + live sim bonus.', '解算器。火 ★2 + 实时解算加成。') }, solverNode('fire', 2)));
   def('turb', Object.assign({ dept: 'fx', h: 1, ram: 4, q: true,
     name: loc('Turbulence', '湍流'), desc: loc('Fire ★3. Adds smoke.', '火 ★3。会产生烟。') }, heroStep('fire', 3, { apply: s => { s.smoke = true; } })));
-  def('upres', Object.assign({ dept: 'fx', h: 3, ram: 14, q: true,
+  def('upres', Object.assign({ dept: 'fx', h: 3, ram: 18, q: true,
     name: loc('Upres', '升分辨率'), desc: loc('Fire ★4. Heavy on RAM.', '火 ★4。很吃内存。') }, heroStep('fire', 4)));
   // --- FX: water ---
   def('flipsrc', Object.assign({ dept: 'fx', h: 1, ram: 2, q: true,
     name: loc('FLIP Source', '流体源'), desc: loc('Water ★1.', '水 ★1。') }, heroStep('water', 1)));
-  def('flip', Object.assign({ dept: 'fx', h: 3, ram: 16, q: true,
+  def('flip', Object.assign({ dept: 'fx', h: 3, ram: 18, q: true,
     name: loc('FLIP Solver', 'FLIP 解算'), desc: loc('SOLVER. Water ★2 + live sim bonus. Very heavy.', '解算器。水 ★2 + 实时解算加成。非常重。') }, solverNode('water', 2)));
   def('white', Object.assign({ dept: 'fx', h: 2, ram: 6, q: true,
     name: loc('Whitewater', '白水'), desc: loc('Water ★3. Foam and spray.', '水 ★3。泡沫和水花。') }, heroStep('water', 3)));
-  def('mesher', Object.assign({ dept: 'fx', h: 2, ram: 8, q: true,
+  def('mesher', Object.assign({ dept: 'fx', h: 2, ram: 16, q: true,
     name: loc('Mesher', '网格化'), desc: loc('Water ★4.', '水 ★4。') }, heroStep('water', 4)));
   // --- FX: destruction ---
   def('fracture', Object.assign({ dept: 'fx', h: 1, ram: 3, q: true,
@@ -311,20 +350,22 @@
     o.apply = function (s, ctx) {
       s.lit = true;
       if (!s.tex && !s.stylized) s.polish -= 1; // grey model lit = ugly
-      if (ctx.fail) { s.polish -= 2; s.log.push('fail.light'); }
-      else s.polish += tierPolish(ctx);
       if (base) base(s, ctx);
+      if (!ctx.fail) addPolish(s, 'q:' + ctx.key, tierPolish(ctx));
+      // A failed roll keeps the function (lit, night, fire boost) but costs 1
+      // polish, applied after the node's own bonus so it is a real −1.
+      if (ctx.fail) { losePolish(s, 1); s.log.push('fail.light'); }
     };
     return def(id, o);
   }
-  light('light', { h: 1, ram: 4, name: loc('Basic Light', '基础灯光'), desc: loc('Lights & renders the stream.', '打光并渲染。') });
-  light('threept', { h: 2, ram: 4, name: loc('Three-Point', '三点布光'), desc: loc('Lit, +1 polish.', '打光，+1 打磨。'), extra: s => { s.polish += 1; } });
-  light('hdri', { h: 1, ram: 4, name: loc('HDRI Dome', 'HDRI 环境光'), desc: loc('Lit. +2 polish if Environment is in the stream.', '打光。流里有环境时 +2 打磨。'), extra: s => { if (s.env) s.polish += 2; } });
+  light('light', { h: 1, ram: 3, name: loc('Basic Light', '基础灯光'), desc: loc('Lights & renders the stream. Cheap in RAM.', '打光并渲染。占用内存少。') });
+  light('threept', { h: 2, ram: 4, name: loc('Three-Point', '三点布光'), desc: loc('Lit, +1 polish.', '打光，+1 打磨。'), extra: s => { addPolish(s, 'threept', 1); } });
+  light('hdri', { h: 1, ram: 4, name: loc('HDRI Dome', 'HDRI 环境光'), desc: loc('Lit. +2 polish if Environment is in the stream.', '打光。流里有环境时 +2 打磨。'), extra: s => { if (s.env) addPolish(s, 'hdri', 2); } });
   light('moon', { h: 1, ram: 4, name: loc('Moonlight', '月光'), desc: loc('Lit, makes it a night shot.', '打光，变成夜景。'), extra: s => { s.night = true; } });
   light('firelight', { h: 2, ram: 6, name: loc('Fire Light', '火光照明'), desc: loc('Needs fire. Lit, fire +0.5★, +1 polish.', '需要火。打光，火 +0.5★，+1 打磨。'),
     check: s => (!s.geo ? 'err.needGeo' : (s.step.fire < 1 ? 'err.needFire' : null)),
-    extra: s => { s.bonus.fire += 0.5; s.polish += 1; } });
-  light('pathtrace', { h: 5, ram: 16, name: loc('Path Tracer', '路径追踪'), desc: loc('Lit, +2 polish. Slow, heavy.', '打光，+2 打磨。又慢又重。'), extra: s => { s.polish += 2; } });
+    extra: s => { s.bonus.fire += 0.5; addPolish(s, 'firelight', 1); } });
+  light('pathtrace', { h: 5, ram: 16, name: loc('Path Tracer', '路径追踪'), desc: loc('Lit, +2 polish. Slow, heavy.', '打光，+2 打磨。又慢又重。'), extra: s => { addPolish(s, 'pathtrace', 2); } });
 
   // --- COMP ---
   function comp(id, o) {
@@ -334,9 +375,12 @@
     o.check = o.check || (s => (!s.lit ? 'err.needLit' : null));
     o.apply = function (s, ctx) {
       s.final = true;
-      if (ctx.fail) { s.polish -= 1; s.log.push('fail.comp'); }
-      else s.polish += tierPolish(ctx);
+      if (!ctx.fail) addPolish(s, 'q:' + ctx.key, tierPolish(ctx));
       if (base) base(s, ctx);
+      // Nuke Hotkeys: every Comp node adds +1 polish, exempt from the
+      // one-per-source rule (per node, even duplicates).
+      if (ctx.relics.has('hotkeys')) s.polish += 1;
+      if (ctx.fail) { losePolish(s, 1); s.log.push('fail.comp'); }
     };
     return def(id, o);
   }
@@ -344,15 +388,27 @@
   comp('plateint', { h: 2, ram: 4, name: loc('Plate Integrate', '实拍合成'), desc: loc('Needs a Plate merged in. Final + “On the plate”.', '需要并进实拍。成片 + 合进实拍。'),
     check: s => (!s.lit ? 'err.needLit' : (!s.plate ? 'err.needPlate' : null)),
     extra: s => { s.onPlate = true; } });
-  comp('grade', { h: 1, ram: 2, name: loc('Grade', '调色'), desc: loc('Final, +1 polish (+1 more with LUT Library).', '成片，+1 打磨（LUT 库再 +1）。'),
-    extra: (s, ctx) => { s.polish += 1 + (ctx.relics.has('lut') ? 1 : 0); } });
-  comp('lens', { h: 1, ram: 2, name: loc('Lens & Grain', '镜头与颗粒'), desc: loc('Final, matched grain, +1 polish.', '成片，匹配颗粒，+1 打磨。'), extra: s => { s.grain = true; s.polish += 1; } });
+  comp('grade', { h: 1, ram: 2, name: loc('Grade', '调色'), desc: loc('Final, +1 polish (+1 more with LUT Library). At polish ≥5, +0.5★.', '成片，+1 打磨（LUT 库再 +1）。打磨 ≥5 时 +0.5★。'),
+    extra: (s, ctx) => { addPolish(s, 'grade', 1 + (ctx.relics.has('lut') ? 1 : 0)); s.gradeStar = true; } });
+  comp('lens', { h: 1, ram: 2, name: loc('Lens & Grain', '镜头与颗粒'), desc: loc('Final, matched grain, +1 polish.', '成片，匹配颗粒，+1 打磨。'), extra: s => { s.grain = true; addPolish(s, 'lens', 1); } });
   comp('haze', { h: 1, ram: 2, name: loc('Heat Haze', '热浪扭曲'), desc: loc('Needs fire. Final, fire +0.5★.', '需要火。成片，火 +0.5★。'),
     check: s => (!s.lit ? 'err.needLit' : (s.step.fire < 1 ? 'err.needFire' : null)), extra: s => { s.bonus.fire += 0.5; } });
   def('glow', { dept: 'comp', h: 1, ram: 2, q: true, hero: { el: 'magic', step: 4 },
     name: loc('Glow', '辉光'), desc: loc('Magic ★4. Needs Trails and Lighting. Final.', '魔法 ★4。需要拖尾和灯光。成片。'),
     check: s => (!s.lit ? 'err.needLit' : (s.step.magic < 3 ? 'err.needStep' : null)),
-    apply(s, ctx) { s.final = true; if (ctx.fail) { s.log.push('fail.comp'); return; } s.step.magic = Math.max(s.step.magic, 4); s.bonus.magic += tierStars(ctx); } });
+    apply(s, ctx) {
+      s.final = true;
+      if (ctx.relics.has('hotkeys')) s.polish += 1;
+      if (ctx.fail) {
+        s.log.push('fail.comp');
+        s.step.magic = Math.max(s.step.magic, 4);
+        s.bonus.magic -= 0.5;
+        losePolish(s, 1);
+        return;
+      }
+      s.step.magic = Math.max(s.step.magic, 4);
+      s.bonus.magic += tierStars(ctx);
+    } });
   def('roto', { dept: 'comp', h: 2, ram: 2, rescue: true,
     name: loc('Roto Rescue', 'Roto 救场'), desc: loc('“Fix it in comp.” Revives a diverged sim one ★ lower. Final if lit.', '“后期再修”。把发散的解算救回来，低一档。打过光则成片。'),
     check: s => null,
@@ -385,18 +441,18 @@
     nerd_destr:    { icon: 'nerd', el: 'destr', name: loc('Demolition Fan', '拆迁爱好者'), desc: loc('Destruction +0.5★; +0.5★ more if alone.', '破碎 +0.5★；只有破碎时再 +0.5★。') },
     nerd_creature: { icon: 'nerd', el: 'creature', name: loc('Creature Whisperer', '生物低语者'), desc: loc('Creature +0.5★; +0.5★ more if alone.', '生物 +0.5★；只有生物时再 +0.5★。') },
     nerd_magic:    { icon: 'nerd', el: 'magic', name: loc('Spell Weaver', '织法者'), desc: loc('Magic +0.5★; +0.5★ more if alone.', '魔法 +0.5★；只有魔法时再 +0.5★。') },
-    usd:      { icon: 'usd', name: loc('USD Pipeline', 'USD 管线'), desc: loc('Merge costs 0h and adds +1 polish.', 'Merge 不耗时，且 +1 打磨。') },
-    farm:     { icon: 'farm', name: loc('Farm Account', '农场账户'), desc: loc('Render farm hours cost half.', '渲染农场半价。') },
-    caffeine: { icon: 'coffee', name: loc('Caffeine Habit', '咖啡因依赖'), desc: loc('+3h every week. Rent +$25 (coffee).', '每周 +3 小时。房租 +$25（咖啡钱）。') },
-    monitor:  { icon: 'monitor', name: loc('Second Monitor', '第二块屏'), desc: loc('See hidden client requirements before the first cook.', '第一次 Cook 前就能看到客户的隐藏要求。') },
+    usd:      { icon: 'usd', name: loc('USD Pipeline', 'USD 管线'), desc: loc('Merge costs 0h, and the merged stream gets +0.5★ (hero element).', 'Merge 不耗时，合并后的数据流 +0.5★（主角元素）。') },
+    farm:     { icon: 'farm', name: loc('Farm Account', '农场账户'), desc: loc('Render farm hours cost half, and each rental gives +1h.', '渲染农场半价，而且每次租用多给 +1 小时。') },
+    caffeine: { icon: 'coffee', name: loc('Caffeine Habit', '咖啡因依赖'), desc: loc('+5h every week. Rent +$25 (coffee).', '每周 +5 小时。房租 +$25（咖啡钱）。') },
+    monitor:  { icon: 'monitor', name: loc('Second Monitor', '第二块屏'), desc: loc('See hidden client requirements before the first cook; those jobs get +1 polish.', '第一次 Cook 前就能看到客户的隐藏要求；有隐藏要求的活 +1 打磨。') },
     notebook: { icon: 'book', name: loc('Mira\'s Notebook', 'Mira 的笔记本'), desc: loc('+1 dailies per job.', '每个活 +1 次 dailies。') },
-    backup:   { icon: 'drive', name: loc('Backup Drive', '备份硬盘'), desc: loc('Immune to hardware disasters.', '免疫硬件灾难事件。') },
+    backup:   { icon: 'drive', name: loc('Backup Drive', '备份硬盘'), desc: loc('Immune to hardware disasters, and +2h every job.', '免疫硬件灾难事件，而且每个活 +2 小时。') },
     lut:      { icon: 'lut', name: loc('LUT Library', 'LUT 库'), desc: loc('Grade gives +1 more polish.', 'Grade 多 +1 打磨。') },
-    wedge:    { icon: 'wedge', name: loc('Wedge Script', 'Wedge 脚本'), desc: loc('Sim viewer shows the predicted divergence frame.', '解算窗口显示预测的发散帧。') },
+    wedge:    { icon: 'wedge', name: loc('Wedge Script', 'Wedge 脚本'), desc: loc('Sim viewer shows the predicted divergence frame; solvers are 8% steadier.', '解算窗口显示预测的发散帧；解算器稳定 8%。') },
     hda:      { icon: 'hda', name: loc('HDA Toolkit', 'HDA 工具箱'), desc: loc('Unlocks “Package HDA” in the shop: fuse two nodes into one cell.', '商店解锁“打包 HDA”：两个节点合成一格。') },
-    pip:      { icon: 'cat', name: loc('Pip on the Desk', '桌上的 Pip'), desc: loc('Once per job, a failed quality roll is undone. (Pip hit Ctrl+Z.)', '每个活一次，失败的质量判定被撤销（Pip 踩到了 Ctrl+Z）。') },
+    pip:      { icon: 'cat', name: loc('Pip on the Desk', '桌上的 Pip'), desc: loc('Once per job a failed quality roll is undone, and Pip adds +1 polish to every shot. (Pip hit Ctrl+Z.)', '每个活一次撤销失败的质量判定，而且 Pip 给每个镜头 +1 打磨（Pip 踩到了 Ctrl+Z）。') },
     website:  { icon: 'web', name: loc('Portfolio Website', '作品集网站'), desc: loc('Studio tests: +2 polish. Reel shots +$60 when delivered.', '工作室测试 +2 打磨。每个进 reel 的镜头 +$60。') },
-    hotkeys:  { icon: 'keys', name: loc('Nuke Hotkeys', 'Nuke 快捷键'), desc: loc('Comp nodes cost 0h.', '合成节点不耗时。') },
+    hotkeys:  { icon: 'keys', name: loc('Nuke Hotkeys', 'Nuke 快捷键'), desc: loc('Every Comp node gives +1 polish (stacks, even duplicates).', '每个合成节点 +1 打磨（可以叠，重复节点也算）。') },
     lookdev:  { icon: 'eye', name: loc('Look-dev Eye', '材质眼'), desc: loc('Look-dev matches give +1 more polish.', '材质对口多 +1 打磨。') },
     confidence: { icon: 'star', name: loc('Quiet Confidence', '底气'), desc: loc('You turned down an offer. +1 dailies on studio tests, +1 polish everywhere.', '你拒绝过 offer。工作室测试 +1 dailies，所有镜头 +1 打磨。') }
   };
@@ -442,7 +498,6 @@
     for (const p of parts) {
       const d = NODE_DEFS[p];
       let x = d.h;
-      if (d.dept === 'comp' && relics.has('hotkeys')) x = 0;
       if (d.merge && relics.has('usd')) x = 0;
       h += x;
     }
@@ -469,17 +524,18 @@
     const s = cloneStream(valid[0]);
     for (let i = 1; i < valid.length; i++) {
       const o = valid[i];
-      for (const k of ['geo', 'organic', 'hard', 'env', 'scanned', 'plate', 'tex', 'texMatch', 'stylized', 'rig', 'anim', 'lit', 'night', 'final', 'onPlate', 'grain', 'smoke']) s[k] = s[k] || o[k];
+      for (const k of ['geo', 'organic', 'hard', 'env', 'envMerged', 'scanned', 'plate', 'tex', 'texMatch', 'stylized', 'rig', 'anim', 'lit', 'night', 'final', 'onPlate', 'grain', 'smoke', 'usdMerged', 'gradeStar']) s[k] = s[k] || o[k];
       for (const e of ELEMENT_IDS) {
         if (o.step[e] > s.step[e] || (o.step[e] === s.step[e] && o.bonus[e] > s.bonus[e])) { s.step[e] = o.step[e]; s.bonus[e] = o.bonus[e]; }
       }
       s.polish = Math.max(s.polish, o.polish) + Math.min(s.polish, o.polish) * 0.5;
+      for (const k in (o.polishSrc || {})) s.polishSrc[k] = 1;
       if (o.dead && !s.dead) { s.dead = true; s.deadEl = o.deadEl; s.deadStep = o.deadStep; }
       for (const d of o.depts) addDept(s, d);
       if (!s.model && o.model) s.model = o.model;
       s.rows += o.rows;
     }
-    s.polish = Math.floor(s.polish);
+    s.polish = round1(s.polish);
     return s;
   }
 
@@ -497,6 +553,10 @@
     if (v <= 0) return 0;
     const heroes = ELEMENT_IDS.filter(e => s.step[e] > 0);
     if (relics.has('nerd_' + el)) v += 0.5 + (heroes.length === 1 ? 0.5 : 0);
+    // USD Pipeline: a merged stream carries +0.5★ (a very good merge).
+    if (relics.has('usd') && s.usdMerged) v += 0.5;
+    // Grade is now the polish node that can tip a polished shot into a star.
+    if (s.gradeStar && (s.polish || 0) >= 5) v += 0.5;
     let cap = CONFIG.maxStars;
     if (!s.lit) cap = CONFIG.capUnlit; else if (!s.final) cap = CONFIG.capNoComp;
     return clamp(round1(v), 0, cap);
@@ -541,10 +601,15 @@
             const up = (r > 0 && c > 0) ? streams[r - 1][c - 1] : null;
             const dn = (r < R - 1 && c > 0) ? streams[r + 1][c - 1] : null;
             sig += '{' + (r > 0 && c > 0 ? sigs[r - 1][c - 1] : '') + '|' + (r < R - 1 && c > 0 ? sigs[r + 1][c - 1] : '') + '}';
+            const sideEnv = !!(up && up.env) || !!(dn && dn.env);
+            const baseEnvMerged = !!(s && s.envMerged);
             const m = mergeStreams([s, up, dn]);
             if (!m) { err = 'err.noInput'; break; }
             s = m; addDept(s, 'util');
-            if (relics.has('usd')) s.polish += 1;
+            // Environment only counts when the Terrain row is merged in from a
+            // side row — Terrain as the main row's own source does not count.
+            s.envMerged = baseEnvMerged || sideEnv;
+            if (relics.has('usd')) s.usdMerged = true;
           } else if (d.util) {
             // passthrough (stream may be null)
           } else {
@@ -565,8 +630,10 @@
     const rowOut = [];
     for (let r = 0; r < R; r++) rowOut.push(streams[r][C - 1] || null);
     const ramPeak = Math.max(0, ...colRam);
-    // overall polish relic
+    // overall polish relics (each is a unique source, once per row)
     if (relics.has('confidence')) rowOut.forEach(s => { if (s) s.polish += 1; });
+    if (relics.has('pip')) rowOut.forEach(s => { if (s) s.polish += 1; });
+    if (relics.has('monitor') && o.brief && o.brief.hidden) rowOut.forEach(s => { if (s) s.polish += 1; });
     if (o.studioTest && relics.has('website')) rowOut.forEach(s => { if (s) s.polish += 2; });
     let best = null;
     if (o.brief) {
@@ -582,18 +649,28 @@
   /* ================================================================
    * 7. briefs, grading, notes
    * ================================================================ */
+  function polishForGrade(p) {
+    p = Math.max(0, p);
+    const cap = CONFIG.polishSoftCap;
+    if (p <= cap) return p;
+    return cap + (p - cap) * CONFIG.polishSoftRate;
+  }
   function gradeShot(brief, s, relics) {
-    const out = { pass: false, missing: [], stars: 0, polish: 0, pts: 0, score: -999, grade: 'F', el: brief.hero, dead: false };
+    const out = { pass: false, missing: [], stars: 0, polish: 0, gradePolish: 0, pts: 0, score: -999, grade: 'F', el: brief.hero, dead: false };
     if (!s) { out.missing = ['nostream']; return out; }
     if (s.dead) { out.dead = true; out.missing = ['dead']; return out; }
     out.stars = streamStars(s, relics, brief.hero);
     out.polish = Math.max(0, s.polish);
+    // Polish diminishing returns: full value up to the soft cap, half per point
+    // beyond it. Requirements and the UI read the raw polish; only the letter
+    // grade uses gradePolish.
+    out.gradePolish = round1(polishForGrade(out.polish));
     const reqs = brief.reqs.concat(brief.revealed || []);
     for (const q of reqs) { if (!REQS[q.id].test(s, q.n)) out.missing.push(q.id); }
     const heroOk = out.stars >= brief.minStars;
     if (!heroOk) out.missing.unshift('hero');
     out.pass = out.missing.length === 0;
-    out.pts = Math.max(0, (out.stars - brief.minStars) * 2 + out.polish);
+    out.pts = Math.max(0, (out.stars - brief.minStars) * 2 + out.gradePolish);
     out.score = (out.pass ? 1000 : 0) + out.stars * 10 + out.polish - out.missing.length * 30;
     if (!out.pass) out.grade = 'F';
     else if (out.pts >= CONFIG.gradePts.S) out.grade = 'S';
@@ -730,7 +807,7 @@
       final: canLit && canFinal,
       plate: plateRow,
       night: types.has('moon'),
-      env: types.has('terrain'),
+      env: types.has('terrain') && canMerge,
       stylized: types.has('toon'),
       grain: types.has('lens'),
       smoke: fireSmoke || destrSmoke || (types.has('dustpass') && hasGeo)
@@ -749,7 +826,7 @@
     if (!caps.canLit || !caps.canFinal) return 0;
     const types = caps.types;
     const ids = (reqs || []).map(q => q.id);
-    const scanSource = types.has('scan') && el !== 'creature' && !ids.includes('env') && !ids.includes('stylized');
+    const scanSource = types.has('scan') && el !== 'creature' && !ids.includes('stylized');
     let p = scanSource ? 1 : 0; // Scan comes pre-textured, +1 polish
     if (!scanSource) {
       // a surfacing slot exists; take the best match polish
@@ -796,16 +873,16 @@
     let extra = 0;
     const ids = reqs.map(q => q.id);
     const hasPlate = ids.includes('plate');
+    const hasEnv = ids.includes('env');
+    if (hasPlate || hasEnv) extra += 1; // one Merge column can take both side rows
+    if (hasPlate && ids.includes('grain')) extra += 1; // need both Plate Integrate and Lens
     for (const id of ids) {
-      if (id === 'plate') extra += 1; // Merge (Plate Integrate replaces Comp)
-      else if (id === 'smoke') {
+      if (id === 'smoke') {
         const ms = smokeMinStep(caps, el);
         if (ms === 0) extra += 1; // Dust Pass column
         else if (!isFinite(ms)) extra += 99; // no way to make smoke with this hero
       }
-      else if (id === 'env' && el === 'creature') extra += 1; // Terrain can't be the organic source
     }
-    if (hasPlate && ids.includes('grain')) extra += 1; // need both Plate Integrate and Lens
     return Math.max(0, caps.cols - deckBaseCols(caps, el, reqs) - extra);
   }
   /* rough minimum hours for a layout reaching the given chain depth */
@@ -818,10 +895,9 @@
     let h = 0;
     const needStyl = ids.includes('stylized');
     if (creature) h += 2 + 1; // Sculpt + shader
-    else if (needEnv) h += 2 + 1; // Terrain + shader
+    else if (needEnv) h += 1 + 1; // Terrain can't be the main source: Box + shader
     else if (types.has('scan') && !needStyl) h += 3; // Scan is source and texture in one card
     else h += 1 + 1; // Box + shader
-    if (creature && needEnv) h += 2 + 1; // Terrain row + Merge
     for (let s = 1; s <= step; s++) {
       const cands = NODE_IDS.filter(id => {
         const hd = NODE_DEFS[id].hero;
@@ -830,8 +906,10 @@
       if (!cands.length) return Infinity;
       h += Math.min.apply(null, cands.map(id => NODE_DEFS[id].h));
     }
+    if (needEnv) h += 2; // Terrain side row
+    if (needEnv || needPlate) h += 1; // one Merge can pull in both side rows
     h += 1; // any light
-    if (needPlate) { h += 2 + 1; if (needGrain) h += 1; } // Plate Integrate + Merge (+ Lens)
+    if (needPlate) { h += 2; if (needGrain) h += 1; } // Plate Integrate (+ Lens)
     else h += 1; // comp (or Lens)
     const polishReq = reqs.find(q => q.id === 'polish');
     if (polishReq) {
@@ -875,8 +953,10 @@
     const probe = () => kept.concat(gig.hidden ? [gig.hidden] : []);
     const supportRows = list => {
       let r = 0;
+      // Plate and Environment each need their own side row; one Merge can pull
+      // both in, so env + plate needs 3 rows (main + 2 support).
       if (list.some(q => q.id === 'plate')) r += 1;
-      if (gig.hero === 'creature' && list.some(q => q.id === 'env')) r += 1;
+      if (list.some(q => q.id === 'env')) r += 1;
       return r;
     };
     const budget = CONFIG.baseHours + (gig.hoursMod || 0);
@@ -885,7 +965,7 @@
       deckMinHours(caps, gig.hero, probe(), 1) > budget;
     while (kept.length && infeasible()) {
       let idx = kept.findIndex(q => q.id === 'plate');
-      if (idx < 0) idx = kept.findIndex(q => q.id === 'env' && gig.hero === 'creature');
+      if (idx < 0) idx = kept.findIndex(q => q.id === 'env');
       if (idx < 0) idx = kept.findIndex(costly);
       if (idx < 0) break;
       kept.splice(idx, 1);
@@ -899,7 +979,13 @@
         supportRows(hiddenProbe) > caps.rows - 1 ||
         deckMinHours(caps, gig.hero, hiddenProbe, 1) > budget;
       if (bad) {
-        const pool = REQ_POOL.filter(id => caps.reqs[id] && !out.some(q => q.id === id) && id !== 'plate' && id !== 'smoke' && !(gig.hero === 'creature' && id === 'env'));
+        const pool = REQ_POOL.filter(id => {
+          if (!caps.reqs[id] || out.some(q => q.id === id) || id === 'plate' || id === 'smoke') return false;
+          const cand = out.concat([{ id }]);
+          return supportRows(cand) <= caps.rows - 1 &&
+            deckStarsFor(caps, gig.hero, cand) >= 1 &&
+            deckMinHours(caps, gig.hero, cand, 1) <= budget;
+        });
         gig.hidden = pool.length ? { id: pick(rng, pool) } : null;
       }
     }
@@ -1004,6 +1090,7 @@
     let accel = S.instAccel * S.qInst[q];
     if (opts.collision) { inst *= S.collisionMul; accel *= S.collisionMul; }
     if (opts.guru) { inst *= S.guruMul; accel *= S.guruMul; }
+    if (opts.wedge) { inst *= 0.92; accel *= 0.92; }
     if (opts.anim) { inst *= S.animMul; accel *= S.animMul; }
     if (opts.tutorial) { inst *= 0.55; accel *= 0.55; }
     const el = NODE_DEFS[cardParts(card).find(p => NODE_DEFS[p].solver)].hero.el;
@@ -1149,7 +1236,7 @@
       if (brief.heroChoices) brief.hero = heroChoice || brief.defaultHero || brief.heroChoices[0];
       if (!brief.hero) brief.hero = 'fire';
       if (this.hasRelic('monitor') && brief.hidden) { brief.revealed.push(brief.hidden); brief.hiddenSeen = true; }
-      const hours = CONFIG.baseHours + (brief.hoursMod || 0) + this.bonusHoursNext + (this.hasRelic('caffeine') ? 3 : 0) + (this.flags.hoursPenalty || 0);
+      const hours = CONFIG.baseHours + (brief.hoursMod || 0) + this.bonusHoursNext + (this.hasRelic('caffeine') ? 5 : 0) + (this.hasRelic('backup') ? 2 : 0) + (this.flags.hoursPenalty || 0);
       this.bonusHoursNext = 0;
       this.flags.hoursPenalty = 0;
       let dailies = CONFIG.dailies + (this.hasRelic('notebook') ? 1 : 0) + (brief.kind === 'test' && this.hasRelic('confidence') ? 1 : 0);
@@ -1234,7 +1321,8 @@
       if (j.farmBought >= CONFIG.farmMaxPerJob) return { ok: false, reason: 'err.farmMax' };
       const p = this.farmPrice();
       if (this.cash < p) return { ok: false, reason: 'err.cash' };
-      this.cash -= p; j.farmBought += 1; j.hoursLeft += CONFIG.farmHours; j.hoursTotal += CONFIG.farmHours;
+      const h = CONFIG.farmHours + (this.hasRelic('farm') ? 1 : 0);
+      this.cash -= p; j.farmBought += 1; j.hoursLeft += h; j.hoursTotal += h;
       this.log('farm', p);
       return { ok: true, price: p };
     }
@@ -1257,7 +1345,7 @@
         if (!isSolverCard(card) || ev.cached[key] || cell.status === 'err') continue;
         // solver only sims if its upstream would be valid: check that check passes
         const inStream = c > 0 ? ev.streams[r][c - 1] : null;
-        const params = simParams(card, { collision: collisionNear(j.grid, r, c), guru: this.hasRelic('guru'), anim: !!(inStream && inStream.anim), tutorial: !!j.brief.tutorial });
+        const params = simParams(card, { collision: collisionNear(j.grid, r, c), guru: this.hasRelic('guru'), wedge: this.hasRelic('wedge'), anim: !!(inStream && inStream.anim), tutorial: !!j.brief.tutorial });
         sims.push({ key, r, c, type: card.type, params, seed: (j.seedBase + j.dailiesUsed * 131 + r * 17 + c * 7) >>> 0, predict: this.hasRelic('wedge') ? simPredict(params) : null });
       }
       return { ok: true, sims, cost: ev.cost, ev };
@@ -1300,15 +1388,9 @@
         }
       }
       const ev = evaluate(j.grid, { relics: this.relicSet(), brief: j.brief, studioTest: j.brief.kind === 'test', solverResults: solver, fails });
-      // memory blow-up from model fails
-      let oomRow = null;
-      for (const f of fresh) {
-        if (f.dept === 'model') {
-          const [r, c] = f.key.split(',').map(Number);
-          if (ev.colRam[c] + 8 > this.hw.ram) { oomRow = r; }
-        }
-      }
-      if (oomRow != null) { ev.rowOut[oomRow] = null; ev.best = null; for (let r = 0; r < ev.R; r++) { const g = gradeShot(j.brief, ev.rowOut[r], this.relicSet()); g.row = r; if (!ev.best || g.score > ev.best.score) ev.best = g; } }
+      // A failed model tier is now just a weaker take (no extra row crash), so
+      // keep the field for the result UI but never null a row.
+      const oomRow = null;
       const okKeys = {};
       for (let r = 0; r < ev.R; r++) for (let c = 0; c < ev.C; c++) if (ev.cells[r][c] && ev.cells[r][c].status === 'ok' && !ev.cells[r][c].empty && !(solver[r + ',' + c] && solver[r + ',' + c].diverged)) okKeys[r + ',' + c] = true;
       j.hoursLeft -= plan.cost;
@@ -1428,7 +1510,14 @@
         unlocks: (NODE_UNLOCKS[id] || []).filter(rid => !caps.reqs[rid])
       }));
       const relicPool = shuffle(rng, SHOP_RELICS.filter(r => !this.relics.includes(r)));
-      const relics = relicPool.slice(0, CONFIG.shop.relicCount).map(id => ({ id, price: Math.round((CONFIG.shop.relicMin + rng() * (CONFIG.shop.relicMax - CONFIG.shop.relicMin)) / 10) * 10, sold: false }));
+      let relicIds = relicPool.slice(0, CONFIG.shop.relicCount);
+      // The HDA (the strongest relic) is guaranteed to show up at least once
+      // in a shop after week 3, so it can't be a pure lottery.
+      if (this.week > 3 && !this.hasRelic('hda') && !this.flags.hdaOffered && relicPool.includes('hda')) {
+        relicIds = ['hda'].concat(relicIds.filter(id => id !== 'hda')).slice(0, CONFIG.shop.relicCount);
+        this.flags.hdaOffered = true;
+      }
+      const relics = relicIds.map(id => ({ id, price: Math.round((CONFIG.shop.relicMin + rng() * (CONFIG.shop.relicMax - CONFIG.shop.relicMin)) / 10) * 10, sold: false }));
       return { courses, relics, practiceUsed: false, coffeeUsed: false, hdaUsed: false };
     }
     hwPrice(kind) {

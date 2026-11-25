@@ -367,7 +367,7 @@ function heroPicker(key, def) {
   UI.heroPick[key] = cur;
   return `<div class="muted" style="font-size:13px">${t('board.pickHero')}</div><div class="row">${E.ELEMENT_IDS.map(el => `<span class="elchip ${el === cur ? 'on' : ''}" style="border-color:${E.ELEMENTS[el].color};color:${E.ELEMENTS[el].color}" data-act="pickhero" data-k="${key}" data-el="${el}">${esc(elName(el))}</span>`).join('')}</div>`;
 }
-function hoursFor(b) { return E.CONFIG.baseHours + (b.hoursMod || 0) + G.bonusHoursNext + (G.hasRelic('caffeine') ? 3 : 0) + (G.flags.hoursPenalty || 0); }
+function hoursFor(b) { return E.CONFIG.baseHours + (b.hoursMod || 0) + G.bonusHoursNext + (G.hasRelic('caffeine') ? 5 : 0) + (G.hasRelic('backup') ? 2 : 0) + (G.flags.hoursPenalty || 0); }
 function viewBoard() {
   const B = G.board;
   const cards = [];

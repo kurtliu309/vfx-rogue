@@ -100,24 +100,28 @@ test('grading: pass / fail / grade letters', () => {
   put(g, 0, 0, 'box'); put(g, 0, 1, 'shader'); put(g, 0, 2, 'fracture'); put(g, 0, 3, 'rbd'); put(g, 0, 4, 'threept'); put(g, 0, 5, 'grade');
   const ev = V.evaluate(g, { solverResults: { '0,3': { bonus: 1 } }, brief: brief('destr', 2, ['lit', 'tex', 'final']) });
   assert.ok(ev.best.pass);
-  // stars 3, over 1 → 2 pts + polish (threept 1 + grade 1) = 4 → A
+  // stars 3, over 1 → 2 pts + polish (threept 1 + grade 1) = 4 → B (A = 6, S = 9)
   assert.strictEqual(ev.best.stars, 3);
-  assert.strictEqual(ev.best.grade, 'A');
+  assert.strictEqual(ev.best.grade, 'B');
   const ev2 = V.evaluate(g, { solverResults: { '0,3': { bonus: 1 } }, brief: brief('fire', 1, ['lit']) });
   assert.ok(!ev2.best.pass);
   assert.ok(ev2.best.missing.includes('hero'));
 });
 
-test('quality tiers add hours/RAM/risk; hero tiers add +0.5★', () => {
+test('quality tiers add hours/RAM/risk; hero tiers add +0.5★ and fail to a weaker take', () => {
   const c = V.makeCard('turb', { q: 3 });
   assert.strictEqual(V.cardHours(c), 3);
   assert.strictEqual(V.cardRam(c), 8);
-  assert.strictEqual(V.cardRisk(c), 0.3);
+  assert.strictEqual(V.cardRisk(c), 0.25);
   const g = grid(1, 6);
   put(g, 0, 0, 'box'); put(g, 0, 1, 'pyrosrc', { q: 3 }); put(g, 0, 2, 'light'); put(g, 0, 3, 'comp');
   assert.strictEqual(V.streamStars(V.evaluate(g, {}).rowOut[0], [], 'fire'), 2);
   const fails = { '0,1': true };
-  assert.strictEqual(V.evaluate(g, { fails }).rowOut[0].step.fire, 0);
+  const weak = V.evaluate(g, { fails }).rowOut[0];
+  // A failed hero quality roll keeps the step (no broken chain) but loses its
+  // tier bonus and half a star.
+  assert.strictEqual(weak.step.fire, 1);
+  assert.strictEqual(V.streamStars(weak, [], 'fire'), 0.5);
 });
 
 test('specialist relics: +0.5★, +1★ when the element is alone', () => {
@@ -249,6 +253,195 @@ test('HDA packs two nodes into one cell', () => {
   const s = V.evaluate(gr, { solverResults: { '0,1': { bonus: 0.5 } } }).rowOut[0];
   assert.strictEqual(s.step.fire, 2);
   assert.strictEqual(V.cardHours(h), 2);
+});
+
+test('polish: same source counts once; quality-tier polish counts per node', () => {
+  const g = grid(1, 5);
+  put(g, 0, 0, 'box'); put(g, 0, 1, 'shader'); put(g, 0, 2, 'light');
+  put(g, 0, 3, 'grade'); put(g, 0, 4, 'grade');
+  assert.strictEqual(V.evaluate(g, {}).rowOut[0].polish, 1, 'two Grades = one Grade of polish');
+  const g2 = grid(1, 5);
+  put(g2, 0, 0, 'box'); put(g2, 0, 1, 'shader'); put(g2, 0, 2, 'light');
+  put(g2, 0, 3, 'lens'); put(g2, 0, 4, 'lens');
+  assert.strictEqual(V.evaluate(g2, {}).rowOut[0].polish, 1, 'two Lens nodes = one Lens of polish');
+  // Quality polish is exempt: two different nodes at Q2 each add their half.
+  const g3 = grid(1, 4);
+  put(g3, 0, 0, 'box', { q: 2 }); put(g3, 0, 1, 'shader', { q: 2 });
+  put(g3, 0, 2, 'light'); put(g3, 0, 3, 'comp');
+  assert.strictEqual(V.evaluate(g3, {}).rowOut[0].polish, 1, 'Q2 box + Q2 shader = 0.5 + 0.5');
+});
+
+test('grades: B/A/S thresholds, new multipliers, soft polish cap', () => {
+  assert.deepStrictEqual(V.CONFIG.gradePts, { B: 3, A: 6, S: 9 });
+  assert.deepStrictEqual(V.CONFIG.gradeMult, { C: 0.85, B: 1.1, A: 1.5, S: 2.1 });
+  const s = V.newStream();
+  s.geo = true; s.tex = true; s.lit = true; s.final = true; s.step.fire = 4;
+  const b = { kind: 'gig', hero: 'fire', minStars: 2, reqs: [], revealed: [] };
+  let r = V.gradeShot(b, s, []);
+  assert.strictEqual(r.stars, 4);
+  assert.strictEqual(r.pts, 4);
+  assert.strictEqual(r.grade, 'B');
+  s.polish = 2; r = V.gradeShot(b, s, []);
+  assert.strictEqual(r.pts, 6); assert.strictEqual(r.grade, 'A');
+  // Raw polish 8 stays 8 for requirements/UI; grading uses 3 + (8−3)×0.5 = 5.5.
+  s.polish = 8; r = V.gradeShot(b, s, []);
+  assert.strictEqual(r.polish, 8);
+  assert.strictEqual(r.gradePolish, 5.5);
+  assert.strictEqual(r.pts, 9.5);
+  assert.strictEqual(r.grade, 'S');
+});
+
+test('quality failure is a weaker take: chain step survives, support/light/comp keep working', () => {
+  // Hero chain: failed Q2 Pyro Source still counts step 1; later Turbo is legal.
+  const g = grid(1, 6);
+  put(g, 0, 0, 'box'); put(g, 0, 1, 'pyrosrc', { q: 2 }); put(g, 0, 2, 'pyro');
+  put(g, 0, 3, 'turb'); put(g, 0, 4, 'light'); put(g, 0, 5, 'comp');
+  const weak = V.evaluate(g, { fails: { '0,1': true } }).rowOut[0];
+  assert.strictEqual(weak.step.fire, 3, 'chain did not break');
+  assert.strictEqual(V.streamStars(weak, [], 'fire'), 2.5, '−0.5★');
+  const strong = V.evaluate(g, {}).rowOut[0];
+  assert.strictEqual(V.streamStars(strong, [], 'fire'), 3.5, 'Q2 success = +0.5★');
+  // Surfacing: textures stay, no quality polish, −1.
+  const gs = grid(1, 4);
+  put(gs, 0, 0, 'box'); put(gs, 0, 1, 'shader', { q: 2 }); put(gs, 0, 2, 'light'); put(gs, 0, 3, 'comp');
+  assert.strictEqual(V.evaluate(gs, {}).rowOut[0].polish, 0.5);
+  const sf = V.evaluate(gs, { fails: { '0,1': true } }).rowOut[0];
+  assert.ok(sf.tex, 'failed shader still textures');
+  assert.strictEqual(sf.polish, 0);
+  // Lighting: still lit/final, but 1 less polish than a clean Q2.
+  const gl = grid(1, 4);
+  put(gl, 0, 0, 'box'); put(gl, 0, 1, 'shader'); put(gl, 0, 2, 'threept', { q: 2 }); put(gl, 0, 3, 'comp');
+  const lf = V.evaluate(gl, { fails: { '0,2': true } }).rowOut[0];
+  assert.ok(lf.lit && lf.final);
+  assert.strictEqual(lf.polish, 0);
+  // Comp: final survives, grade loses its polish.
+  const gc = grid(1, 4);
+  put(gc, 0, 0, 'box'); put(gc, 0, 1, 'shader'); put(gc, 0, 2, 'light'); put(gc, 0, 3, 'grade', { q: 2 });
+  const cf = V.evaluate(gc, { fails: { '0,3': true } }).rowOut[0];
+  assert.ok(cf.final);
+  assert.strictEqual(cf.polish, 0);
+  // Functional traits survive a failed support roll: Toon stays stylized,
+  // Lens still lays in grain.
+  const gt = grid(1, 4);
+  put(gt, 0, 0, 'box'); put(gt, 0, 1, 'toon', { q: 2 }); put(gt, 0, 2, 'light'); put(gt, 0, 3, 'comp');
+  const tf = V.evaluate(gt, { fails: { '0,1': true } }).rowOut[0];
+  assert.ok(tf.tex && tf.stylized, 'failed toon keeps stylized');
+  const glens = grid(1, 4);
+  put(glens, 0, 0, 'box'); put(glens, 0, 1, 'shader'); put(glens, 0, 2, 'light'); put(glens, 0, 3, 'lens', { q: 2 });
+  const lf2 = V.evaluate(glens, { fails: { '0,3': true } }).rowOut[0];
+  assert.ok(lf2.grain, 'failed Lens keeps grain');
+  assert.strictEqual(lf2.polish, 0);
+  // Source: a failed Q2 source still creates geometry; only the tier polish is lost.
+  const gsrc = grid(1, 4);
+  put(gsrc, 0, 0, 'box', { q: 2 }); put(gsrc, 0, 1, 'shader'); put(gsrc, 0, 2, 'light'); put(gsrc, 0, 3, 'comp');
+  const srcF = V.evaluate(gsrc, { fails: { '0,0': true } }).rowOut[0];
+  assert.ok(srcF.geo);
+  assert.strictEqual(srcF.polish, 0);
+  assert.strictEqual(V.evaluate(gsrc, {}).rowOut[0].polish, 0.5);
+});
+
+test('environment: Terrain must be Merged in from a side row; main-row Terrain does not count', () => {
+  const main = grid(1, 4);
+  put(main, 0, 0, 'terrain'); put(main, 0, 1, 'shader'); put(main, 0, 2, 'light'); put(main, 0, 3, 'comp');
+  const s1 = V.evaluate(main, {}).rowOut[0];
+  assert.ok(s1.env, 'terrain still makes environment geo');
+  assert.strictEqual(V.REQS.env.test(s1), false, 'but as the main source it does not satisfy Environment');
+  const side = grid(2, 5);
+  put(side, 0, 0, 'box'); put(side, 0, 2, 'merge'); put(side, 0, 3, 'light'); put(side, 0, 4, 'comp');
+  put(side, 1, 0, 'terrain');
+  const s2 = V.evaluate(side, {}).rowOut[0];
+  assert.strictEqual(V.REQS.env.test(s2), true, 'merged side Terrain satisfies Environment');
+  // env + plate at once needs 3 rows (main in the middle, one side row each).
+  const both = grid(3, 5);
+  put(both, 0, 0, 'plate');
+  put(both, 1, 0, 'box'); put(both, 1, 1, 'pyrosrc'); put(both, 1, 2, 'merge'); put(both, 1, 3, 'light'); put(both, 1, 4, 'plateint');
+  put(both, 2, 0, 'terrain');
+  const s3 = V.evaluate(both, {}).rowOut[1];
+  assert.strictEqual(V.REQS.env.test(s3), true);
+  assert.strictEqual(V.REQS.plate.test(s3), true);
+  const noMerge = V.deckCapabilities([V.makeCard('terrain'), V.makeCard('light'), V.makeCard('comp')], { cols: 5, rows: 2 }, []);
+  assert.strictEqual(noMerge.reqs.env, false, 'Terrain without Merge cannot satisfy env');
+});
+
+test('hardware: heavy FX RAM, Q2/Q3 RAM multipliers, GPU/RAM prices', () => {
+  assert.ok(V.NODE_DEFS.upres.ram >= 16 && V.NODE_DEFS.upres.ram <= 20);
+  assert.ok(V.NODE_DEFS.flip.ram >= 16 && V.NODE_DEFS.flip.ram <= 20);
+  assert.ok(V.NODE_DEFS.mesher.ram >= 16 && V.NODE_DEFS.mesher.ram <= 20);
+  const flip = V.makeCard('flip');
+  assert.strictEqual(V.cardRam(flip), V.NODE_DEFS.flip.ram);
+  assert.strictEqual(V.cardRam(Object.assign({}, flip, { q: 2 })), Math.round(V.NODE_DEFS.flip.ram * 1.5));
+  assert.strictEqual(V.cardRam(Object.assign({}, flip, { q: 3 })), V.NODE_DEFS.flip.ram * 2);
+  assert.deepStrictEqual(V.CONFIG.shop.gpu, [320, 480]);
+  assert.strictEqual(V.CONFIG.shop.ram, 160);
+});
+
+test('solver tiers: quality raises detail growth and stays zero-risk', () => {
+  const q1 = V.simParams(V.makeCard('pyro'), {});
+  const q3 = V.simParams(V.makeCard('pyro', { q: 3 }), {});
+  assert.ok(q3.detail > q1.detail, 'qDetail grows with the tier');
+  assert.strictEqual(V.cardRisk(V.makeCard('pyro', { q: 3 })), 0, 'no quality risk for solvers');
+});
+
+test('relics: caffeine, hotkeys, usd, hda, farm, monitor, backup, wedge, pip', () => {
+  const a = newJobGame('pyro'), b = newJobGame('pyro');
+  b.relics.push('caffeine');
+  a.chooseJob('gig', 0); b.chooseJob('gig', 0);
+  assert.strictEqual(b.job.hoursTotal, a.job.hoursTotal + 5, 'caffeine +5h');
+  assert.strictEqual(b.rentDue(), a.rentDue() + 25, 'caffeine +$25 rent');
+
+  const c = newJobGame('pyro'), d = newJobGame('pyro');
+  d.relics.push('backup');
+  c.chooseJob('gig', 0); d.chooseJob('gig', 0);
+  assert.strictEqual(d.job.hoursTotal, c.job.hoursTotal + 2, 'backup +2h');
+
+  // Hotkeys: every Comp node +1 polish, stacks even for duplicates, no longer 0h.
+  const gh = grid(1, 5);
+  put(gh, 0, 0, 'box'); put(gh, 0, 1, 'shader'); put(gh, 0, 2, 'light'); put(gh, 0, 3, 'comp'); put(gh, 0, 4, 'comp');
+  const plain = V.evaluate(gh, {}).rowOut[0].polish;
+  assert.strictEqual(V.evaluate(gh, { relics: ['hotkeys'] }).rowOut[0].polish, plain + 2);
+  assert.strictEqual(V.cardHours(V.makeCard('comp'), []), 1, 'Comp is no longer free');
+
+  // USD: Merge 0h, merged stream +0.5★.
+  const gu = grid(2, 5);
+  put(gu, 0, 0, 'box'); put(gu, 0, 1, 'pyrosrc'); put(gu, 0, 2, 'merge'); put(gu, 0, 3, 'light'); put(gu, 0, 4, 'comp');
+  put(gu, 1, 0, 'plate');
+  assert.strictEqual(V.streamStars(V.evaluate(gu, {}).rowOut[0], [], 'fire'), 1);
+  assert.strictEqual(V.streamStars(V.evaluate(gu, { relics: ['usd'] }).rowOut[0], ['usd'], 'fire'), 1.5);
+  assert.strictEqual(V.cardHours(V.makeCard('merge'), ['usd']), 0);
+
+  // HDA: priced at the relic floor and guaranteed in a post-week-3 shop.
+  assert.strictEqual(V.CONFIG.shop.hda, V.CONFIG.shop.relicMin);
+  const gh2 = new V.Game(9).start('pyro');
+  gh2.week = 4;
+  const sh = gh2.makeShop();
+  const hda = sh.relics.find(r => r.id === 'hda');
+  assert.ok(hda, 'HDA must be offered exactly once after week 3');
+  assert.ok(hda.price >= V.CONFIG.shop.relicMin && hda.price <= V.CONFIG.shop.relicMax);
+
+  // Farm: half price and +1h per rental.
+  const gf = newJobGame('pyro');
+  gf.chooseJob('gig', 0);
+  gf.relics.push('farm');
+  gf.job.hoursLeft = 0;
+  const cash = gf.cash;
+  assert.ok(gf.rentFarm().ok);
+  assert.strictEqual(gf.cash, cash - Math.round(V.CONFIG.farmBasePrice / 2));
+  assert.strictEqual(gf.job.hoursLeft, V.CONFIG.farmHours + 1);
+
+  // Monitor: hidden-requirement jobs get +1 polish.
+  const gm = grid(1, 4);
+  put(gm, 0, 0, 'box'); put(gm, 0, 1, 'shader'); put(gm, 0, 2, 'light'); put(gm, 0, 3, 'comp');
+  const hiddenBrief = { kind: 'gig', hero: 'fire', minStars: 0, reqs: [], hidden: { id: 'night' }, revealed: [] };
+  const basePol = V.evaluate(gm, { brief: hiddenBrief }).rowOut[0].polish;
+  assert.strictEqual(V.evaluate(gm, { brief: hiddenBrief, relics: ['monitor'] }).rowOut[0].polish, basePol + 1);
+
+  // Wedge: steadier sims (and the predicted frame stays).
+  const w0 = V.simParams(V.makeCard('pyro'), {});
+  const w1 = V.simParams(V.makeCard('pyro'), { wedge: true });
+  assert.ok(w1.inst < w0.inst);
+
+  // Pip: +1 polish on every shot (the failure undo is in commitCook).
+  assert.strictEqual(V.evaluate(gm, { relics: ['pip'] }).rowOut[0].polish, V.evaluate(gm, {}).rowOut[0].polish + 1);
 });
 
 test('full headless run of 12 weeks with a scripted player never throws', () => {
