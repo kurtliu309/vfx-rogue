@@ -387,6 +387,7 @@ test('relics: caffeine, hotkeys, usd, hda, farm, monitor, backup, wedge, pip', (
   b.relics.push('caffeine');
   a.chooseJob('gig', 0); b.chooseJob('gig', 0);
   assert.strictEqual(b.job.hoursTotal, a.job.hoursTotal + 5, 'caffeine +5h');
+  assert.strictEqual(b.job.dailiesMax, a.job.dailiesMax + 1, 'caffeine +1 dailies');
   assert.strictEqual(b.rentDue(), a.rentDue() + 25, 'caffeine +$25 rent');
 
   const c = newJobGame('pyro'), d = newJobGame('pyro');
@@ -426,7 +427,7 @@ test('relics: caffeine, hotkeys, usd, hda, farm, monitor, backup, wedge, pip', (
   const cash = gf.cash;
   assert.ok(gf.rentFarm().ok);
   assert.strictEqual(gf.cash, cash - Math.round(V.CONFIG.farmBasePrice / 2));
-  assert.strictEqual(gf.job.hoursLeft, V.CONFIG.farmHours + 1);
+  assert.strictEqual(gf.job.hoursLeft, V.CONFIG.farmHours + 2);
 
   // Monitor: hidden-requirement jobs get +1 polish.
   const gm = grid(1, 4);
@@ -442,6 +443,50 @@ test('relics: caffeine, hotkeys, usd, hda, farm, monitor, backup, wedge, pip', (
 
   // Pip: +1 polish on every shot (the failure undo is in commitCook).
   assert.strictEqual(V.evaluate(gm, { relics: ['pip'] }).rowOut[0].polish, V.evaluate(gm, {}).rowOut[0].polish + 1);
+
+  // Website: studio tests get +3 polish now.
+  const baseTest = V.evaluate(gm, { studioTest: true }).rowOut[0].polish;
+  assert.strictEqual(V.evaluate(gm, { studioTest: true, relics: ['website'] }).rowOut[0].polish, baseTest + 3);
+});
+
+test('relics: Backup Drive undoes one failed quality roll per job', () => {
+  let seen = null;
+  for (let seed = 1; seed <= 120 && !seen; seed++) {
+    const g = new V.Game(seed).start('pyro');
+    g.inbox.forEach((m, i) => { if (m.choices && m.resolved == null) g.resolveEvent(i, 0); });
+    assert.ok(g.toBoard());
+    g.chooseJob('gig', 0);
+    g.relics.push('backup', 'pip');
+    // A Q3 source has a 25% failure chance. Mark pip as already spent so the
+    // backup is the relic under test.
+    g.job.pipUsed = true;
+    const card = g.cards.find(c => c.type === 'pyrosrc');
+    card.q = 3;
+    g.place(uidOf(g, 'box'), 0, 0); g.place(card.uid, 0, 1); g.place(uidOf(g, 'light'), 0, 2);
+    const r = g.commitCook({});
+    assert.ok(r.ok, r.reason);
+    if (r.fresh.some(f => f.backup)) seen = { g, r };
+  }
+  assert.ok(seen, 'backup undo must fire on a failed quality roll');
+  assert.ok(!seen.g.job.last.fails['0,1'], 'the failure is undone');
+  assert.ok(seen.g.job.backupUsed);
+});
+
+test('shop: only the player\'s own element nerd relic is offered', () => {
+  for (const bg of Object.keys(V.BACKGROUNDS)) {
+    const own = V.BACKGROUNDS[bg].el;
+    for (let seed = 1; seed <= 15; seed++) {
+      const g = new V.Game(seed).start(bg);
+      for (let w = 1; w <= 11; w++) {
+        g.week = w;
+        const sh = g.makeShop();
+        for (const it of sh.relics) {
+          if (!it.id.startsWith('nerd_')) continue;
+          assert.strictEqual(it.id, 'nerd_' + own, 'foreign nerd relic in ' + bg + ' shop');
+        }
+      }
+    }
+  }
 });
 
 test('full headless run of 12 weeks with a scripted player never throws', () => {
@@ -509,7 +554,8 @@ test('board: the gig for your best element is always deck-satisfiable', () => {
 });
 
 test('shop: course count from config, one missing requirement enabler always on offer', () => {
-  const enablers = ['moon', 'lens', 'toon', 'plateint', 'terrain'];
+  const enablers = V.REQ_ENABLERS;
+  assert.deepStrictEqual(enablers, ['moon', 'lens', 'toon', 'plateint', 'terrain', 'dustpass']);
   assert.strictEqual(V.CONFIG.shop.courseCount, 4);
   for (const bg of Object.keys(V.BACKGROUNDS)) {
     for (let seed = 1; seed <= 20; seed++) {
@@ -524,7 +570,13 @@ test('shop: course count from config, one missing requirement enabler always on 
         if (!missing.length) continue;
         const offered = sh.courses.filter(c => missing.includes(c.type));
         assert.ok(offered.length >= 1, 'no missing enabler in shop (' + bg + ' seed ' + seed + ' w' + w + ')');
-        assert.ok(offered.some(c => c.unlocks && c.unlocks.length), 'missing enabler has no unlock label');
+        // The label must list exactly the capabilities the deck still lacks —
+        // Dust Pass can be missing as a card while the deck already smokes.
+        const caps = V.deckCapabilities(g.cards, g.hw, g.relicSet());
+        for (const c of offered) {
+          const want = (V.NODE_UNLOCKS[c.type] || []).filter(rid => !caps.reqs[rid]);
+          assert.deepStrictEqual(c.unlocks, want, 'unlock label mismatch for ' + c.type);
+        }
       }
     }
   }
@@ -556,11 +608,18 @@ test('Halcyon: reachable numbers and auteur tests do not move the polish bar', (
   assert.strictEqual(b2.reqs.find(q => q.id === 'polish').n, 3);
 });
 
-test('gate: the current test shot counts towards the reel gate; distinct still needs 2 elements', () => {
+test('gate: the current test shot counts for count/top; distinct comes from the reel only', () => {
   const gate = V.reelGate('halcyon');
   const reel = [{ stars: 3.5, el: 'fire' }, { stars: 4, el: 'fire' }, { stars: 3, el: 'fire' }];
   assert.strictEqual(V.checkGate(gate, reel).ok, false, 'one element only');
-  assert.strictEqual(V.checkGate(gate, reel, { testShot: { stars: 3.5, heroChoices: true } }).ok, true);
+  // A hero-choice test shot no longer fakes a second element (P0-1): it used
+  // to auto-satisfy Halcyon's distinct gate and pushed dream to ~90%.
+  assert.strictEqual(V.checkGate(gate, reel, { testShot: { stars: 3.5, heroChoices: true } }).ok, false, 'test shot is not a second element');
+  assert.strictEqual(V.checkGate(gate, reel, { testShot: { stars: 3.5, el: 'water' } }).ok, false, 'even a known test element does not count');
+  // Count and top still include the test shot: 2 reel shots + the test = 3.
+  const reelTwo = [{ stars: 4, el: 'fire' }, { stars: 3.5, el: 'water' }];
+  const res = V.checkGate(gate, reelTwo, { testShot: { stars: 3.5, heroChoices: true } });
+  assert.strictEqual(res.ok, true, 'two reel elements + test counts for count/top');
   const reelOne = [{ stars: 4, el: 'fire' }];
   assert.strictEqual(V.checkGate(gate, reelOne, { testShot: { stars: 3.5, heroChoices: true } }).ok, false, 'count still short');
 });
@@ -640,7 +699,7 @@ test('sim bands: three levels, and each sim shifts the edges', () => {
   assert.ok(shifts.size > 5, 'band shift varies per sim');
 });
 
-test('notes: easy client rounds up the invoice; pincher offers a real choice', () => {
+test('notes: easy client rounds up the invoice; pincher is handled before the cook', () => {
   const rng = V.mulberry32(1);
   const b = brief('fire', 1, ['lit']);
   b.kind = 'gig'; b.client = 'rumble';
@@ -665,34 +724,72 @@ test('notes: easy client rounds up the invoice; pincher offers a real choice', (
   b2.kind = 'gig'; b2.client = 'oldpine';
   const n2 = V.notesFor(b2, { pass: true, missing: [], grade: 'B' }, 0, rng);
   assert.strictEqual(n2.persona, 'pincher');
-  assert.ok(n2.choice && n2.choice.options.length === 2);
-  assert.strictEqual(b2.twisted, true);
+  // The pincher choice moved to chooseJob (before the first Cook), so dailies
+  // no longer roll a twist for it.
+  assert.ok(!n2.choice);
+  assert.strictEqual(b2.twisted, undefined);
 });
 
-test('pincher: choosing the hours cut applies it and blocks delivery until answered', () => {
+test('easy: the +20% only survives if you deliver right after the first dailies', () => {
   const g = newJobGame('pyro');
+  g.board.gigs[0].client = 'rumble';
   g.chooseJob('gig', 0);
-  g.job.brief = { kind: 'gig', client: 'oldpine', hero: 'fire', minStars: 1, reqs: [{ id: 'lit' }], revealed: [], pay: 900 };
-  g.place(uidOf(g, 'box'), 0, 0); g.place(uidOf(g, 'light'), 0, 1);
+  g.place(uidOf(g, 'box'), 0, 0); g.place(uidOf(g, 'pyrosrc'), 0, 1); g.place(uidOf(g, 'light'), 0, 2);
   assert.ok(g.commitCook({}).ok);
-  assert.ok(g.job.pendingNote, 'pincher must leave a pending choice');
+  assert.strictEqual(g.job.brief.payBoost, 1.2);
+  assert.strictEqual(g.job.brief.payBoostDailies, 1);
+  const n = g.job.notes[0];
+  assert.ok(n.lines.some(l => /20%/.test(l.en)));
+  // Cook again (the network is unchanged, so this is free) — the bonus lapses.
+  assert.ok(g.commitCook({}).ok);
+  assert.strictEqual(g.job.brief.payBoost, 1);
+  assert.ok(g.job.brief.payBoostLost);
+  const lost = g.job.notes[1];
+  assert.ok(lost.lines.some(l => /20%/.test(l.zh + l.en)), 'the client mentions the lost bonus');
+  // Delivering now pays the normal rate.
+  const gr = V.gradeShot(g.job.brief, g.job.last.stream, g.relicSet());
+  const expected = Math.round(g.job.brief.pay * V.CONFIG.gradeMult[gr.grade] / 10) * 10;
+  assert.strictEqual(g.deliver().pay, expected);
+});
+
+test('auteur: the note raises polish AND the star bar; studio tests are exempt', () => {
+  const b = { kind: 'gig', client: 'juno', hero: 'fire', minStars: 2, reqs: [{ id: 'polish', n: 2 }], revealed: [] };
+  V.notesFor(b, { pass: true, missing: [], grade: 'B' }, 0, V.mulberry32(3));
+  assert.strictEqual(b.reqs.find(q => q.id === 'polish').n, 3);
+  assert.strictEqual(b.minStars, 2.5);
+  const t = { kind: 'test', studio: 'halcyon', hero: 'fire', minStars: 3.5, reqs: [{ id: 'polish', n: 2 }], revealed: [] };
+  V.notesFor(t, { pass: true, missing: [], grade: 'B' }, 0, V.mulberry32(3));
+  assert.strictEqual(t.minStars, 3.5);
+  assert.strictEqual(t.reqs[0].n, 2);
+});
+
+test('pincher: the hours/pay choice comes with the brief and hours cost only −10%', () => {
+  const g = newJobGame('pyro');
+  g.board.gigs[0].client = 'oldpine';
+  g.board.gigs[0].pay = 900;
+  assert.ok(g.chooseJob('gig', 0).ok);
+  assert.ok(g.job.pendingNote, 'pincher must ask before the first Cook');
   assert.strictEqual(g.canDeliver(), false, 'delivery waits for the answer');
+  assert.ok(g.job.pendingNote.options[0].label.en && g.job.pendingNote.options[0].label.zh, 'labels are bilingual');
+  assert.ok(g.job.pendingNote.options[1].label.en && g.job.pendingNote.options[1].label.zh);
   const before = g.job.hoursLeft;
   assert.ok(g.resolveNote('hours').ok);
-  assert.strictEqual(g.job.hoursLeft, Math.round(before * 0.8));
+  assert.strictEqual(g.job.hoursLeft, Math.round(before * 0.9), 'hours branch is −10%');
   assert.strictEqual(g.job.pendingNote, null);
-  assert.strictEqual(g.canDeliver(), true);
   // the pay branch is the other option
-  g.job.brief = { kind: 'gig', client: 'oldpine', hero: 'fire', minStars: 1, reqs: [{ id: 'lit' }], revealed: [], pay: 900 };
-  g.job.pendingNote = { kind: 'pincher', defaultKey: 'pay', options: [{ key: 'hours' }, { key: 'pay' }] };
-  g.resolveNote('pay');
-  assert.strictEqual(g.job.brief.payMulNote, 0.8);
-  // headless callers that ignore the choice get the safe default (keep hours)
-  g.job.brief = { kind: 'gig', client: 'oldpine', hero: 'fire', minStars: 1, reqs: [{ id: 'lit' }], revealed: [], pay: 900 };
-  g.job.pendingNote = { kind: 'pincher', defaultKey: 'pay', options: [{ key: 'hours' }, { key: 'pay' }] };
-  g.prepareCook();
-  assert.strictEqual(g.job.pendingNote, null, 'cooking falls back to the default');
-  assert.strictEqual(g.job.brief.payMulNote, 0.8);
+  const g2 = newJobGame('pyro');
+  g2.board.gigs[0].client = 'oldpine';
+  g2.chooseJob('gig', 0);
+  g2.resolveNote('pay');
+  assert.strictEqual(g2.job.brief.payMulNote, 0.8);
+  // headless callers that ignore the choice get the safe default
+  const g3 = newJobGame('pyro');
+  g3.board.gigs[0].client = 'oldpine';
+  g3.chooseJob('gig', 0);
+  g3.place(uidOf(g3, 'box'), 0, 0); g3.place(uidOf(g3, 'light'), 0, 1);
+  g3.prepareCook();
+  assert.strictEqual(g3.job.pendingNote, null, 'cooking falls back to the default');
+  assert.strictEqual(g3.job.brief.payMulNote, 0.8);
 });
 
 test('flipper: payMul 1.6 and the new hero is the deck\'s second-strongest element', () => {
@@ -708,6 +805,40 @@ test('flipper: payMul 1.6 and the new hero is the deck\'s second-strongest eleme
   assert.strictEqual(gig.hero, 'water');
 });
 
+test('flipper: pivots only to an element the deck can deliver; otherwise keeps the brief', () => {
+  const cards = ['box', 'shader', 'light', 'comp', 'pyrosrc', 'pyro', 'turb', 'flipsrc', 'popsrc', 'pop'].map(id => V.makeCard(id));
+  const caps = V.deckCapabilities(cards, { cols: 8, rows: 2, ram: 64 }, []);
+  // water only has a source (★1), magic has source + solver (★2): skip water.
+  const g1 = { kind: 'gig', client: 'fizzco', hero: 'fire', minStars: 2, reqs: [{ id: 'lit' }, { id: 'final' }], revealed: [] };
+  assert.strictEqual(V.flipTargetFor(caps, g1, V.mulberry32(5)), 'magic');
+  V.notesFor(g1, { pass: true, missing: [], grade: 'A' }, 0, V.mulberry32(5), { caps });
+  assert.strictEqual(g1.hero, 'magic', 'pivot to the feasible element');
+  assert.strictEqual(g1.minStars, 1.5);
+
+  // A deck with no second chain: keep the original brief and grumble.
+  const solo = ['box', 'shader', 'light', 'comp', 'pyrosrc', 'pyro', 'turb'].map(id => V.makeCard(id));
+  const caps2 = V.deckCapabilities(solo, { cols: 8, rows: 2, ram: 64 }, []);
+  const g2 = { kind: 'gig', client: 'fizzco', hero: 'fire', minStars: 2, reqs: [{ id: 'lit' }, { id: 'final' }], revealed: [] };
+  const before = JSON.stringify({ hero: g2.hero, reqs: g2.reqs, minStars: g2.minStars });
+  assert.strictEqual(V.flipTargetFor(caps2, g2, V.mulberry32(5)), null);
+  const n2 = V.notesFor(g2, { pass: true, missing: [], grade: 'A' }, 0, V.mulberry32(5), { caps: caps2 });
+  assert.strictEqual(JSON.stringify({ hero: g2.hero, reqs: g2.reqs, minStars: g2.minStars }), before, 'requirements stay put');
+  assert.ok(g2.flipDeclined);
+  assert.ok(n2.lines.some(l => /kit|toolbox/.test(l.en)), 'complaint note in English');
+  assert.ok(n2.lines.some(l => /工具箱|撑不起/.test(l.zh)), 'complaint note in Chinese');
+
+  // A declined pivot keeps the normal fee: no 1.3× pivot bonus.
+  const g = newJobGame('pyro');
+  g.board.gigs[0].client = 'fizzco';
+  g.chooseJob('gig', 0);
+  g.place(uidOf(g, 'box'), 0, 0); g.place(uidOf(g, 'pyrosrc'), 0, 1); g.place(uidOf(g, 'light'), 0, 2);
+  assert.ok(g.commitCook({}).ok);
+  assert.ok(g.job.brief.flipDeclined, 'pyro-only deck cannot pivot');
+  const gr = V.gradeShot(g.job.brief, g.job.last.stream, g.relicSet());
+  const expected = Math.round(g.job.brief.pay * V.CONFIG.gradeMult[gr.grade] / 10) * 10;
+  assert.strictEqual(g.deliver().pay, expected);
+});
+
 test('secret: hidden requirements are drawn only from what the deck can satisfy', () => {
   const cards = ['box', 'shader', 'light', 'comp', 'merge', 'terrain', 'toon', 'lens'].map(id => V.makeCard(id));
   const caps = V.deckCapabilities(cards, { cols: 8, rows: 4, ram: 64 }, []);
@@ -716,6 +847,63 @@ test('secret: hidden requirements are drawn only from what the deck can satisfy'
     assert.ok(gig.hidden, 'secret gig has a hidden requirement');
     assert.ok(caps.reqs[gig.hidden.id], 'hidden ' + gig.hidden.id + ' must be satisfiable (seed ' + seed + ')');
   }
+});
+
+test('dead nodes now have a niche: 2h finishers, polish lights/finishers, extra magic star', () => {
+  assert.strictEqual(V.NODE_DEFS.scan.h, 2);
+  assert.strictEqual(V.NODE_DEFS.upres.h, 2);
+  assert.strictEqual(V.NODE_DEFS.mesher.h, 2);
+  assert.strictEqual(V.NODE_DEFS.groom.h, 2, 'groom: closer to the other elements');
+  assert.strictEqual(V.NODE_DEFS.pathtrace.h, 4);
+
+  // Scan is a texturing source with a look-dev match and +1 polish.
+  const gs = grid(1, 4);
+  put(gs, 0, 0, 'scan'); put(gs, 0, 1, 'metal'); put(gs, 0, 2, 'light'); put(gs, 0, 3, 'comp');
+  const ss = V.evaluate(gs, {}).rowOut[0];
+  assert.strictEqual(V.REQS.tex.test(ss), true);
+  assert.strictEqual(ss.polish, 3, 'scan +1, metal match +2');
+
+  // Fire Light is the fire build's polish light (+2).
+  const gf = grid(1, 6);
+  put(gf, 0, 0, 'box'); put(gf, 0, 1, 'shader'); put(gf, 0, 2, 'pyrosrc'); put(gf, 0, 3, 'pyro'); put(gf, 0, 4, 'firelight'); put(gf, 0, 5, 'comp');
+  const sf = V.evaluate(gf, {}).rowOut[0];
+  assert.ok(sf.lit && sf.final);
+  assert.strictEqual(sf.polish, 2);
+  assert.strictEqual(V.streamStars(sf, [], 'fire'), 2.5);
+
+  // Heat Haze is a fire finisher with polish.
+  const gh = grid(1, 6);
+  put(gh, 0, 0, 'box'); put(gh, 0, 1, 'shader'); put(gh, 0, 2, 'pyrosrc'); put(gh, 0, 3, 'pyro'); put(gh, 0, 4, 'light'); put(gh, 0, 5, 'haze');
+  const sh = V.evaluate(gh, {}).rowOut[0];
+  assert.ok(sh.final);
+  assert.strictEqual(sh.polish, 1);
+  assert.strictEqual(V.streamStars(sh, [], 'fire'), 2.5);
+
+  // Glow closes the magic chain with an extra half star.
+  const gg = grid(1, 7);
+  put(gg, 0, 0, 'box'); put(gg, 0, 1, 'shader'); put(gg, 0, 2, 'popsrc'); put(gg, 0, 3, 'pop'); put(gg, 0, 4, 'trails'); put(gg, 0, 5, 'light'); put(gg, 0, 6, 'glow');
+  const sg = V.evaluate(gg, {}).rowOut[0];
+  assert.ok(sg.final);
+  assert.strictEqual(sg.step.magic, 4);
+  assert.strictEqual(V.streamStars(sg, [], 'magic'), 4.5);
+
+  // Roto is a cheap comp polish/final that still rescues a sim.
+  const gr = grid(1, 4);
+  put(gr, 0, 0, 'box'); put(gr, 0, 1, 'shader'); put(gr, 0, 2, 'light'); put(gr, 0, 3, 'roto');
+  const sr = V.evaluate(gr, {}).rowOut[0];
+  assert.ok(sr.final);
+  assert.strictEqual(sr.polish, 1);
+  assert.strictEqual(V.cardHours(V.makeCard('roto')), 1);
+
+  // Path Tracer: universal +2 polish at 4h.
+  const gp = grid(1, 5);
+  put(gp, 0, 0, 'box'); put(gp, 0, 1, 'shader'); put(gp, 0, 2, 'flipsrc'); put(gp, 0, 3, 'pathtrace'); put(gp, 0, 4, 'comp');
+  const sp = V.evaluate(gp, {}).rowOut[0];
+  assert.strictEqual(sp.polish, 2);
+  assert.strictEqual(V.cardHours(V.makeCard('pathtrace')), 4);
+
+  // Upres / Mesher now fit the 4th chain step in a normal hours budget.
+  assert.strictEqual(V.deckMinHours(V.deckCapabilities(['box', 'shader', 'pyrosrc', 'pyro', 'turb', 'upres', 'light', 'comp'].map(id => V.makeCard(id)), { cols: 8, rows: 2 }, []), 'fire', [{ id: 'lit' }, { id: 'final' }], 4) <= V.CONFIG.baseHours, true);
 });
 
 test('i18n: en/zh UI tables have identical, non-empty keys', () => {

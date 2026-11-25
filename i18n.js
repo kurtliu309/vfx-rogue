@@ -107,6 +107,8 @@
       'work.tutorial1': 'Mira: “Put a Box in the first cell. Then your hero source next to it.”',
       'work.tutorial2': 'Mira: “Now a solver, then a Light at the end so it renders.”',
       'work.tutorial3': 'Mira: “Hit COOK. Read the notes. Then DELIVER.”',
+      'work.easyBoost': 'Easy client: +20% pay if you deliver now. Cooking again loses it.',
+      'work.easyLost': 'The easy client\'s +20% is gone — you cooked again.',
 
       'node.dept': 'Department',
       'node.hours': 'Hours',
@@ -148,6 +150,7 @@
       'res.fail.light': 'Fireflies! −1 polish',
       'res.fail.comp': 'Over-processed',
       'res.pip': 'Pip hit Ctrl+Z. A failure was undone.',
+      'res.backup': 'Backup Drive caught a bad quality roll. Failure undone.',
       'res.oom': 'Out of memory! Row {r} crashed.',
       'res.ok': 'OK',
 
@@ -353,6 +356,8 @@
       'work.tutorial1': 'Mira：“第一格放个 Box。旁边放你的主角源。”',
       'work.tutorial2': 'Mira：“接一个解算器，最后放一盏灯，这样才会渲染。”',
       'work.tutorial3': 'Mira：“点 COOK，看意见，然后交付。”',
+      'work.easyBoost': '好说话的客户：现在交付报酬 +20%。再 Cook 一次就没了。',
+      'work.easyLost': '好说话客户多给的 20% 没了——你又 Cook 了一次。',
 
       'node.dept': '部门',
       'node.hours': '工时',
@@ -394,6 +399,7 @@
       'res.fail.light': '萤火虫噪点！−1 打磨',
       'res.fail.comp': '处理过度',
       'res.pip': 'Pip 踩到了 Ctrl+Z，一次失败被撤销了。',
+      'res.backup': '备份硬盘接住了一次质量判定失败。这次不算。',
       'res.oom': '内存不足！第 {r} 行崩溃了。',
       'res.ok': '好',
 

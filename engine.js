@@ -247,8 +247,8 @@
   def('terrain', { dept: 'model', h: 2, ram: 6, q: true, source: true,
     name: loc('Terrain', '地形'), desc: loc('Environment geo. Merge it in from a side row to satisfy “Environment”. Pairs with Texture Paint.', '环境模型。从另一行 Merge 进来才能满足“有环境”；和 Texture Paint 对口。'),
     apply(s, ctx) { s.geo = true; s.env = true; s.envMerged = false; s.model = 'env'; if (ctx.fail) s.log.push('fail.model'); addPolish(s, 'q:' + ctx.key, tierPolish(ctx)); } });
-  def('scan', { dept: 'model', h: 3, ram: 8, q: true, source: true,
-    name: loc('Photo Scan', '扫描模型'), desc: loc('Scanned asset: comes textured, +1 polish. Heavy.', '扫描资产：自带材质，+1 打磨。很吃内存。'),
+  def('scan', { dept: 'model', h: 2, ram: 8, q: true, source: true,
+    name: loc('Photo Scan', '扫描模型'), desc: loc('Scanned asset: comes textured, +1 polish, saves the surfacing slot. Heavy on RAM.', '扫描资产：自带材质，+1 打磨，省掉材质格。很吃内存。'),
     apply(s, ctx) { s.geo = true; s.scanned = true; s.tex = true; s.hard = true; s.model = 'scan'; s.polish += 1; if (ctx.fail) s.log.push('fail.model'); addPolish(s, 'q:' + ctx.key, tierPolish(ctx)); } });
   def('plate', { dept: 'plate', h: 0, ram: 2, source: true,
     name: loc('Plate', '实拍素材'), desc: loc('Live-action footage. Merge it into a CG row.', '实拍画面。用 Merge 并进 CG 行。'),
@@ -304,7 +304,7 @@
   def('vellum', Object.assign({ dept: 'fx', h: 2, ram: 8, q: true,
     name: loc('Vellum Cloth', 'Vellum 布料'), desc: loc('SOLVER. Creature ★3 + live sim bonus.', '解算器。生物 ★3 + 实时解算加成。') },
   solverNode('creature', 3)));
-  def('groom', Object.assign({ dept: 'char', h: 3, ram: 6, q: true,
+  def('groom', Object.assign({ dept: 'char', h: 2, ram: 6, q: true,
     name: loc('Groom', '毛发'), desc: loc('Creature ★4. Fur sells the creature.', '生物 ★4。毛发让生物成立。') },
   heroStep('creature', 4)));
 
@@ -315,7 +315,7 @@
     name: loc('Pyro Solver', 'Pyro 解算'), desc: loc('SOLVER. Fire ★2 + live sim bonus.', '解算器。火 ★2 + 实时解算加成。') }, solverNode('fire', 2)));
   def('turb', Object.assign({ dept: 'fx', h: 1, ram: 4, q: true,
     name: loc('Turbulence', '湍流'), desc: loc('Fire ★3. Adds smoke.', '火 ★3。会产生烟。') }, heroStep('fire', 3, { apply: s => { s.smoke = true; } })));
-  def('upres', Object.assign({ dept: 'fx', h: 3, ram: 18, q: true,
+  def('upres', Object.assign({ dept: 'fx', h: 2, ram: 18, q: true,
     name: loc('Upres', '升分辨率'), desc: loc('Fire ★4. Heavy on RAM.', '火 ★4。很吃内存。') }, heroStep('fire', 4)));
   // --- FX: water ---
   def('flipsrc', Object.assign({ dept: 'fx', h: 1, ram: 2, q: true,
@@ -325,7 +325,9 @@
   def('white', Object.assign({ dept: 'fx', h: 2, ram: 6, q: true,
     name: loc('Whitewater', '白水'), desc: loc('Water ★3. Foam and spray.', '水 ★3。泡沫和水花。') }, heroStep('water', 3)));
   def('mesher', Object.assign({ dept: 'fx', h: 2, ram: 16, q: true,
-    name: loc('Mesher', '网格化'), desc: loc('Water ★4.', '水 ★4。') }, heroStep('water', 4)));
+    // Two hours, like the other chain finishers — the 4th step is now a real
+    // choice instead of a dead node that never fits the hours budget.
+    name: loc('Mesher', '网格化'), desc: loc('Water ★4 — the finishing step of the FLIP chain.', '水 ★4——FLIP 链的收尾一步。') }, heroStep('water', 4)));
   // --- FX: destruction ---
   def('fracture', Object.assign({ dept: 'fx', h: 1, ram: 3, q: true,
     name: loc('Fracture', '破碎'), desc: loc('Destruction ★1. +0.5★ on Hard Surface.', '破碎 ★1。硬表面上 +0.5★。') },
@@ -369,10 +371,10 @@
   light('threept', { h: 2, ram: 4, name: loc('Three-Point', '三点布光'), desc: loc('Lit, +1 polish.', '打光，+1 打磨。'), extra: s => { addPolish(s, 'threept', 1); } });
   light('hdri', { h: 1, ram: 4, name: loc('HDRI Dome', 'HDRI 环境光'), desc: loc('Lit. +2 polish if Environment is in the stream.', '打光。流里有环境时 +2 打磨。'), extra: s => { if (s.env) addPolish(s, 'hdri', 2); } });
   light('moon', { h: 1, ram: 4, name: loc('Moonlight', '月光'), desc: loc('Lit, makes it a night shot.', '打光，变成夜景。'), extra: s => { s.night = true; } });
-  light('firelight', { h: 2, ram: 6, name: loc('Fire Light', '火光照明'), desc: loc('Needs fire. Lit, fire +0.5★, +1 polish.', '需要火。打光，火 +0.5★，+1 打磨。'),
+  light('firelight', { h: 2, ram: 6, name: loc('Fire Light', '火光照明'), desc: loc('Needs fire. Lit, fire +0.5★, +2 polish — the fire build\'s polish light.', '需要火。打光，火 +0.5★，+2 打磨——火系构筑的打磨灯。'),
     check: s => (!s.geo ? 'err.needGeo' : (s.step.fire < 1 ? 'err.needFire' : null)),
-    extra: s => { s.bonus.fire += 0.5; addPolish(s, 'firelight', 1); } });
-  light('pathtrace', { h: 5, ram: 16, name: loc('Path Tracer', '路径追踪'), desc: loc('Lit, +2 polish. Slow, heavy.', '打光，+2 打磨。又慢又重。'), extra: s => { addPolish(s, 'pathtrace', 2); } });
+    extra: s => { s.bonus.fire += 0.5; addPolish(s, 'firelight', 2); } });
+  light('pathtrace', { h: 4, ram: 16, name: loc('Path Tracer', '路径追踪'), desc: loc('Lit, +2 polish on any element. Slow, heavy — buy it with spare hours.', '打光，任何元素都 +2 打磨。又慢又重——有余粮时再买。'), extra: s => { addPolish(s, 'pathtrace', 2); } });
 
   // --- COMP ---
   function comp(id, o) {
@@ -398,10 +400,10 @@
   comp('grade', { h: 1, ram: 2, name: loc('Grade', '调色'), desc: loc('Final, +1 polish (+1 more with LUT Library). At polish ≥5, +0.5★.', '成片，+1 打磨（LUT 库再 +1）。打磨 ≥5 时 +0.5★。'),
     extra: (s, ctx) => { addPolish(s, 'grade', 1 + (ctx.relics.has('lut') ? 1 : 0)); s.gradeStar = true; } });
   comp('lens', { h: 1, ram: 2, name: loc('Lens & Grain', '镜头与颗粒'), desc: loc('Final, matched grain, +1 polish.', '成片，匹配颗粒，+1 打磨。'), extra: s => { s.grain = true; addPolish(s, 'lens', 1); } });
-  comp('haze', { h: 1, ram: 2, name: loc('Heat Haze', '热浪扭曲'), desc: loc('Needs fire. Final, fire +0.5★.', '需要火。成片，火 +0.5★。'),
-    check: s => (!s.lit ? 'err.needLit' : (s.step.fire < 1 ? 'err.needFire' : null)), extra: s => { s.bonus.fire += 0.5; } });
+  comp('haze', { h: 1, ram: 2, name: loc('Heat Haze', '热浪扭曲'), desc: loc('Needs fire. Final, fire +0.5★, +1 polish.', '需要火。成片，火 +0.5★，+1 打磨。'),
+    check: s => (!s.lit ? 'err.needLit' : (s.step.fire < 1 ? 'err.needFire' : null)), extra: s => { s.bonus.fire += 0.5; addPolish(s, 'haze', 1); } });
   def('glow', { dept: 'comp', h: 1, ram: 2, q: true, hero: { el: 'magic', step: 4 },
-    name: loc('Glow', '辉光'), desc: loc('Magic ★4. Needs Trails and Lighting. Final.', '魔法 ★4。需要拖尾和灯光。成片。'),
+    name: loc('Glow', '辉光'), desc: loc('Magic ★4, and +0.5★ on top. Needs Trails and Lighting. Final.', '魔法 ★4，再 +0.5★。需要拖尾和灯光。成片。'),
     check: s => (!s.lit ? 'err.needLit' : (s.step.magic < 3 ? 'err.needStep' : null)),
     apply(s, ctx) {
       s.final = true;
@@ -414,12 +416,13 @@
         return;
       }
       s.step.magic = Math.max(s.step.magic, 4);
-      s.bonus.magic += tierStars(ctx);
+      s.bonus.magic += tierStars(ctx) + 0.5;
     } });
-  def('roto', { dept: 'comp', h: 2, ram: 2, rescue: true,
-    name: loc('Roto Rescue', 'Roto 救场'), desc: loc('“Fix it in comp.” Revives a diverged sim one ★ lower. Final if lit.', '“后期再修”。把发散的解算救回来，低一档。打过光则成片。'),
+  def('roto', { dept: 'comp', h: 1, ram: 2, rescue: true,
+    name: loc('Roto Rescue', 'Roto 救场'), desc: loc('“Fix it in comp.” +1 polish; revives a diverged sim one ★ lower. Final if lit.', '“后期再修”。+1 打磨；把发散的解算救回来，低一档。打过光则成片。'),
     check: s => null,
     apply(s) {
+      addPolish(s, 'roto', 1);
       if (s.dead) {
         s.dead = false;
         s.step[s.deadEl] = Math.max(s.step[s.deadEl], s.deadStep - 1);
@@ -449,16 +452,16 @@
     nerd_creature: { icon: 'nerd', el: 'creature', name: loc('Creature Whisperer', '生物低语者'), desc: loc('Creature +0.5★; +0.5★ more if alone.', '生物 +0.5★；只有生物时再 +0.5★。') },
     nerd_magic:    { icon: 'nerd', el: 'magic', name: loc('Spell Weaver', '织法者'), desc: loc('Magic +0.5★; +0.5★ more if alone.', '魔法 +0.5★；只有魔法时再 +0.5★。') },
     usd:      { icon: 'usd', name: loc('USD Pipeline', 'USD 管线'), desc: loc('Merge costs 0h, and the merged stream gets +0.5★ (hero element).', 'Merge 不耗时，合并后的数据流 +0.5★（主角元素）。') },
-    farm:     { icon: 'farm', name: loc('Farm Account', '农场账户'), desc: loc('Render farm hours cost half, and each rental gives +1h.', '渲染农场半价，而且每次租用多给 +1 小时。') },
-    caffeine: { icon: 'coffee', name: loc('Caffeine Habit', '咖啡因依赖'), desc: loc('+5h every week. Rent +$25 (coffee).', '每周 +5 小时。房租 +$25（咖啡钱）。') },
+    farm:     { icon: 'farm', name: loc('Farm Account', '农场账户'), desc: loc('Render farm hours cost half, and each rental gives +2h.', '渲染农场半价，而且每次租用多给 +2 小时。') },
+    caffeine: { icon: 'coffee', name: loc('Caffeine Habit', '咖啡因依赖'), desc: loc('+5h and +1 dailies every week. Rent +$25 (coffee).', '每周 +5 小时、+1 次 dailies。房租 +$25（咖啡钱）。') },
     monitor:  { icon: 'monitor', name: loc('Second Monitor', '第二块屏'), desc: loc('See hidden client requirements before the first cook; those jobs get +1 polish.', '第一次 Cook 前就能看到客户的隐藏要求；有隐藏要求的活 +1 打磨。') },
     notebook: { icon: 'book', name: loc('Mira\'s Notebook', 'Mira 的笔记本'), desc: loc('+1 dailies per job.', '每个活 +1 次 dailies。') },
-    backup:   { icon: 'drive', name: loc('Backup Drive', '备份硬盘'), desc: loc('Immune to hardware disasters, and +2h every job.', '免疫硬件灾难事件，而且每个活 +2 小时。') },
+    backup:   { icon: 'drive', name: loc('Backup Drive', '备份硬盘'), desc: loc('Immune to hardware disasters, +2h every job, and once per job a failed quality roll is undone.', '免疫硬件灾难事件，每个活 +2 小时，而且每个活一次撤销失败的质量判定。') },
     lut:      { icon: 'lut', name: loc('LUT Library', 'LUT 库'), desc: loc('Grade gives +1 more polish.', 'Grade 多 +1 打磨。') },
     wedge:    { icon: 'wedge', name: loc('Wedge Script', 'Wedge 脚本'), desc: loc('Sim viewer shows the predicted divergence frame; solvers are 8% steadier.', '解算窗口显示预测的发散帧；解算器稳定 8%。') },
     hda:      { icon: 'hda', name: loc('HDA Toolkit', 'HDA 工具箱'), desc: loc('Unlocks “Package HDA” in the shop: fuse two nodes into one cell.', '商店解锁“打包 HDA”：两个节点合成一格。') },
     pip:      { icon: 'cat', name: loc('Pip on the Desk', '桌上的 Pip'), desc: loc('Once per job a failed quality roll is undone, and Pip adds +1 polish to every shot. (Pip hit Ctrl+Z.)', '每个活一次撤销失败的质量判定，而且 Pip 给每个镜头 +1 打磨（Pip 踩到了 Ctrl+Z）。') },
-    website:  { icon: 'web', name: loc('Portfolio Website', '作品集网站'), desc: loc('Studio tests: +2 polish. Reel shots +$60 when delivered.', '工作室测试 +2 打磨。每个进 reel 的镜头 +$60。') },
+    website:  { icon: 'web', name: loc('Portfolio Website', '作品集网站'), desc: loc('Studio tests: +3 polish. Reel shots +$60 when delivered.', '工作室测试 +3 打磨。每个进 reel 的镜头 +$60。') },
     hotkeys:  { icon: 'keys', name: loc('Nuke Hotkeys', 'Nuke 快捷键'), desc: loc('Every Comp node gives +1 polish (stacks, even duplicates).', '每个合成节点 +1 打磨（可以叠，重复节点也算）。') },
     lookdev:  { icon: 'eye', name: loc('Look-dev Eye', '材质眼'), desc: loc('Look-dev matches give +1 more polish.', '材质对口多 +1 打磨。') },
     confidence: { icon: 'star', name: loc('Quiet Confidence', '底气'), desc: loc('You turned down an offer. +1 dailies on studio tests, +1 polish everywhere.', '你拒绝过 offer。工作室测试 +1 dailies，所有镜头 +1 打磨。') }
@@ -641,7 +644,7 @@
     if (relics.has('confidence')) rowOut.forEach(s => { if (s) s.polish += 1; });
     if (relics.has('pip')) rowOut.forEach(s => { if (s) s.polish += 1; });
     if (relics.has('monitor') && o.brief && o.brief.hidden) rowOut.forEach(s => { if (s) s.polish += 1; });
-    if (o.studioTest && relics.has('website')) rowOut.forEach(s => { if (s) s.polish += 2; });
+    if (o.studioTest && relics.has('website')) rowOut.forEach(s => { if (s) s.polish += 3; });
     let best = null;
     if (o.brief) {
       for (let r = 0; r < R; r++) {
@@ -690,7 +693,9 @@
   const CLIENTS = STORY.CLIENTS;
   const STUDIOS = STORY.STUDIOS;
 
-  function notesFor(brief, g, dailyIdx, rng) {
+  function notesFor(brief, g, dailyIdx, rng, opts) {
+    // opts: { caps } — the deck snapshot, so persona twists can check that the
+    // player can actually follow them.
     // returns { lines:[{who, text(loc)}], changes:{...} }
     const client = brief.client ? CLIENTS[brief.client] : null;
     const studio = brief.studio ? STUDIOS[brief.studio] : null;
@@ -722,12 +727,33 @@
         changes.revealed = brief.hidden;
       } else if (persona === 'flipper') {
         const others = ELEMENT_IDS.filter(e => e !== brief.hero);
-        const nh = brief.flipTo || pick(rng, others);
-        changes.heroFrom = brief.hero;
-        brief.hero = nh; brief.twisted = true;
-        brief.minStars = Math.max(1, brief.minStars - 0.5);
-        lines.push(fmtLine(pick(rng, NL.flip), { el: ELEMENTS[nh].name }));
-        changes.hero = nh;
+        const flipStars = Math.max(1, brief.minStars - 0.5);
+        const allReqs = briefReqList(brief);
+        let nh = null;
+        if (opts && opts.caps) {
+          // Only pivot to an element the deck can actually deliver.
+          const ok = e => e !== brief.hero && flipFeasible(opts.caps, brief, e, flipStars, allReqs, flipBudget(brief));
+          if (brief.flipTo && ok(brief.flipTo)) nh = brief.flipTo;
+          else {
+            const ranked = ELEMENT_IDS.slice().sort((a, b) => (opts.caps.maxStars[b] || 0) - (opts.caps.maxStars[a] || 0));
+            nh = ranked.find(ok) || null;
+          }
+        } else {
+          nh = brief.flipTo || pick(rng, others);
+        }
+        if (nh) {
+          changes.heroFrom = brief.hero;
+          brief.hero = nh; brief.twisted = true;
+          brief.minStars = flipStars;
+          lines.push(fmtLine(pick(rng, NL.flip), { el: ELEMENTS[nh].name }));
+          changes.hero = nh;
+        } else {
+          // No element in the kit can carry the new brief: keep the original
+          // requirements and let the client grumble instead.
+          brief.twisted = true; brief.flipDeclined = true;
+          lines.push(fmtLine(pick(rng, NL.flipStuck), { el: ELEMENTS[brief.hero].name }));
+          changes.flipDeclined = true;
+        }
       } else if (persona === 'auteur') {
         if (brief.kind === 'test' || brief.noPolishTwist) {
           // Studio tests get the auteur's eye, not a moving target (P0-2).
@@ -736,29 +762,30 @@
         } else {
           const pr = brief.reqs.find(q => q.id === 'polish');
           if (pr) { pr.n += 1; } else brief.reqs.push({ id: 'polish', n: 3 });
+          // Perfectionism raises the bar too — a real re-build decision, not
+          // just a polish point that the soft cap swallows.
+          brief.minStars = Math.min(5, round1(brief.minStars + 0.5));
           brief.twisted = true;
-          lines.push(pick(rng, NL.auteur));
+          lines.push(fmtLine(pick(rng, NL.auteur), { el: ELEMENTS[brief.hero].name, n: brief.minStars }));
           changes.polish = true;
+          changes.minStars = brief.minStars;
         }
       } else if (persona === 'easy') {
-        // Easy clients are a resource: deliver this week and they round up.
+        // Easy clients are a resource: deliver straight after the first dailies
+        // and they round up. Cooking again loses the bonus (a real time
+        // pressure instead of a free +20%).
         brief.twisted = true;
         brief.payBoost = 1.2;
+        brief.payBoostDailies = dailyIdx + 1;
         lines.push(pick(rng, NL.easy));
         changes.payBoost = 1.2;
-      } else if (persona === 'pincher') {
-        // Tight budget is a trade-off, not a hidden −3h. The player picks one.
-        brief.twisted = true;
-        lines.push(pick(rng, NL.pincher));
-        choice = {
-          kind: 'pincher', defaultKey: 'pay',
-          options: [
-            { key: 'hours', label: NL.pincherHours },
-            { key: 'pay', label: NL.pincherPay }
-          ]
-        };
-        changes.noteChoice = 'pincher';
       }
+      // 'pincher' asks for its choice before the first Cook (Game.chooseJob),
+      // so there is no twist to roll here.
+    }
+    if (brief.payBoostLost && !brief.easyLostNoted) {
+      brief.easyLostNoted = true;
+      lines.push(pick(rng, NL.easyLost));
     }
     if (g.pass && !lines.length) {
       if (g.grade === 'S') lines.push(pick(rng, NL.love));
@@ -795,7 +822,7 @@
     magic: ['popsrc', 'pop', 'trails', 'glow'],
     creature: ['rig', 'animate|mocap', 'muscle|vellum', 'groom']
   };
-  const REQ_ENABLERS = ['moon', 'lens', 'toon', 'plateint', 'terrain'];
+  const REQ_ENABLERS = ['moon', 'lens', 'toon', 'plateint', 'terrain', 'dustpass'];
   const NODE_UNLOCKS = { moon: ['night'], lens: ['grain'], toon: ['stylized'], plateint: ['plate'], terrain: ['env'], dustpass: ['smoke'] };
 
   function deckTypes(cards) {
@@ -866,12 +893,15 @@
     let bestLight = 0;
     if (types.has('pathtrace')) bestLight = 2;
     if (types.has('hdri') && types.has('terrain')) bestLight = Math.max(bestLight, 2);
+    if (types.has('firelight') && el === 'fire') bestLight = Math.max(bestLight, 2);
     if (types.has('threept') || types.has('firelight')) bestLight = Math.max(bestLight, 1);
     if (ids.includes('night')) bestLight = 0; // Moonlight occupies the light slot
     p += bestLight;
     let bestComp = 0;
     if (types.has('grade')) bestComp = 1;
     if (types.has('lens')) bestComp = 1;
+    if (types.has('roto')) bestComp = Math.max(bestComp, 1);
+    if (types.has('haze') && el === 'fire') bestComp = Math.max(bestComp, 1);
     if (ids.includes('grain')) bestComp = Math.min(bestComp, 1); // Lens is the comp node
     if (ids.includes('plate') && !ids.includes('grain')) bestComp = 0; // Plate Integrate occupies it
     p += bestComp;
@@ -922,7 +952,7 @@
     const needStyl = ids.includes('stylized');
     if (creature) h += 2 + 1; // Sculpt + shader
     else if (needEnv) h += 1 + 1; // Terrain can't be the main source: Box + shader
-    else if (types.has('scan') && !needStyl) h += 3; // Scan is source and texture in one card
+    else if (types.has('scan') && !needStyl) h += NODE_DEFS.scan.h; // Scan is source and texture in one card
     else h += 1 + 1; // Box + shader
     for (let s = 1; s <= step; s++) {
       const cands = NODE_IDS.filter(id => {
@@ -1032,27 +1062,47 @@
     if (gig.minStars > reachable) gig.minStars = Math.max(1, round1(reachable));
     if (gig.flipTo) {
       const flipStars = Math.max(1, gig.minStars - 0.5);
-      const alt = ELEMENT_IDS.filter(e => e !== gig.hero &&
-        deckStarsFor(caps, e, allReqs) >= flipStars &&
-        deckMinHours(caps, e, allReqs, Math.max(1, Math.floor(flipStars))) <= budget);
+      const alt = ELEMENT_IDS.filter(e => e !== gig.hero && flipFeasible(caps, gig, e, flipStars, allReqs, budget));
       if (alt.length && !alt.includes(gig.flipTo)) gig.flipTo = pick(rng, alt);
+      else if (!alt.length) gig.flipTo = null;
     }
     return gig;
   }
+  function briefReqList(brief) {
+    const out = [], seen = {};
+    for (const q of (brief.reqs || []).concat(brief.revealed || []).concat(brief.hidden ? [brief.hidden] : [])) {
+      if (!q || seen[q.id]) continue;
+      seen[q.id] = 1; out.push(q);
+    }
+    return out;
+  }
+  function flipBudget(brief) { return CONFIG.baseHours + (brief.hoursMod || 0); }
+  /* Can this deck pivot the brief to element `el`? A flipper note is only a
+   * fair twist if the new element can reach the (slightly lower) star bar,
+   * satisfy every requirement (hidden included) and fit the hours. */
+  function flipFeasible(caps, brief, el, flipStars, allReqs, budget) {
+    if (!caps || !el || el === brief.hero) return false;
+    for (const q of allReqs) {
+      if (q.id === 'polish') { if ((q.n || 0) > deckPolishFor(caps, el, allReqs)) return false; }
+      else if (!caps.reqs[q.id]) return false;
+    }
+    const step = Math.max(1, Math.floor(flipStars));
+    return deckStarsFor(caps, el, allReqs) >= flipStars &&
+      deckMinHours(caps, el, allReqs, step) <= budget;
+  }
   /* A flipper's new hero should be something the player can actually pivot to:
    * prefer the deck's second-strongest element, so owning a second chain turns
-   * the twist from a punishment into a plan. */
+   * the twist from a punishment into a plan. null = no viable pivot; the note
+   * then keeps the original brief instead of forcing a broken build. */
   function flipTargetFor(caps, gig, rng) {
     const flipStars = Math.max(1, gig.minStars - 0.5);
-    const allReqs = gig.reqs.concat(gig.hidden ? [gig.hidden] : []);
-    const budget = CONFIG.baseHours + (gig.hoursMod || 0);
+    const allReqs = briefReqList(gig);
+    const budget = flipBudget(gig);
     const ranked = ELEMENT_IDS.slice().sort((a, b) => (caps.maxStars[b] || 0) - (caps.maxStars[a] || 0));
-    const ok = e => e !== gig.hero && e !== gig.flipFrom &&
-      deckStarsFor(caps, e, allReqs) >= flipStars &&
-      deckMinHours(caps, e, allReqs, Math.max(1, Math.floor(flipStars))) <= budget;
+    const ok = e => e !== gig.hero && e !== gig.flipFrom && flipFeasible(caps, gig, e, flipStars, allReqs, budget);
     let target = ranked[1] || ranked[0];
     if (!ok(target)) target = ranked.find(ok);
-    return target || pick(rng, ELEMENT_IDS.filter(e => e !== gig.hero));
+    return target || null;
   }
   function genGig(rng, week, clientId, bg, caps) {
     const cl = CLIENTS[clientId];
@@ -1109,11 +1159,10 @@
     res.lines.push({ ok: okCount, key: 'gate.count', vars: { n: gate.count, s: gate.stars, have: countHave } });
     if (!okCount) res.ok = false;
     if (gate.distinct) {
+      // Distinct elements come from the reel only. The test shot counts towards
+      // the number of shots and the ★ bar, but a hero-choice test is not a
+      // second element (it used to auto-satisfy Halcyon's diversity gate).
       const els = new Set(good.map(s => s.el));
-      if (testGood) {
-        if (ts.heroChoices) { if (els.size < ELEMENT_IDS.length) els.add('__test'); }
-        else if (ts.el) els.add(ts.el);
-      }
       const d = Math.min(els.size, ELEMENT_IDS.length);
       const ok = d >= gate.distinct;
       res.lines.push({ ok, key: 'gate.distinct', vars: { n: gate.distinct, have: d } });
@@ -1321,12 +1370,24 @@
       const hours = CONFIG.baseHours + (brief.hoursMod || 0) + this.bonusHoursNext + (this.hasRelic('caffeine') ? 5 : 0) + (this.hasRelic('backup') ? 2 : 0) + (this.flags.hoursPenalty || 0);
       this.bonusHoursNext = 0;
       this.flags.hoursPenalty = 0;
-      let dailies = CONFIG.dailies + (this.hasRelic('notebook') ? 1 : 0) + (brief.kind === 'test' && this.hasRelic('confidence') ? 1 : 0);
+      let dailies = CONFIG.dailies + (this.hasRelic('notebook') ? 1 : 0) + (this.hasRelic('caffeine') ? 1 : 0) + (brief.kind === 'test' && this.hasRelic('confidence') ? 1 : 0);
       this.job = {
         brief, grid: emptyGrid(this.hw.rows, this.hw.cols),
         hoursTotal: hours, hoursLeft: hours, dailiesMax: dailies, dailiesUsed: 0,
-        farmBought: 0, last: null, notes: [], pipUsed: false, results: [], seedBase: Math.floor(this.rng() * 1e9)
+        farmBought: 0, last: null, notes: [], pipUsed: false, backupUsed: false, results: [], seedBase: Math.floor(this.rng() * 1e9)
       };
+      // A tight-budget client asks you to pick hours or fee right away, before
+      // the first Cook — not as a surprise after the network is built.
+      if (brief.kind === 'gig' && brief.client && CLIENTS[brief.client] && CLIENTS[brief.client].persona === 'pincher') {
+        const NL = STORY.NOTE_LINES;
+        this.job.pendingNote = {
+          kind: 'pincher', defaultKey: 'pay',
+          options: [
+            { key: 'hours', label: NL.pincherHours },
+            { key: 'pay', label: NL.pincherPay }
+          ]
+        };
+      }
       this.phase = 'work';
       this.log('job', brief.kind + ':' + (brief.client || brief.studio || '') + ':' + brief.hero);
       return { ok: true };
@@ -1403,7 +1464,7 @@
       if (j.farmBought >= CONFIG.farmMaxPerJob) return { ok: false, reason: 'err.farmMax' };
       const p = this.farmPrice();
       if (this.cash < p) return { ok: false, reason: 'err.cash' };
-      const h = CONFIG.farmHours + (this.hasRelic('farm') ? 1 : 0);
+      const h = CONFIG.farmHours + (this.hasRelic('farm') ? 2 : 0);
       this.cash -= p; j.farmBought += 1; j.hoursLeft += h; j.hoursTotal += h;
       this.log('farm', p);
       return { ok: true, price: p };
@@ -1444,6 +1505,12 @@
       if (!plan.ok) return plan;
       outcomes = outcomes || {};
       const ev0 = plan.ev;
+      // An easy client's +20% is for delivering straight after the first
+      // dailies; cooking again means you chose to keep working, so it lapses.
+      if (j.dailiesUsed > 0 && j.brief.payBoost) {
+        j.brief.payBoost = 1;
+        j.brief.payBoostLost = true;
+      }
       const solver = this.reuseSolver();
       const fails = {};
       const rng = mulberry32(j.seedBase ^ (j.dailiesUsed + 1) * 2654435761);
@@ -1470,6 +1537,7 @@
         const risk = cardRisk(card);
         if (risk > 0 && rng() < risk) {
           if (this.hasRelic('pip') && !j.pipUsed) { j.pipUsed = true; fresh.push({ key, pip: true }); continue; }
+          if (this.hasRelic('backup') && !j.backupUsed) { j.backupUsed = true; fresh.push({ key, backup: true }); continue; }
           fails[key] = true; fresh.push({ key, dept: cardDept(card) });
         }
       }
@@ -1481,7 +1549,7 @@
       for (let r = 0; r < ev.R; r++) for (let c = 0; c < ev.C; c++) if (ev.cells[r][c] && ev.cells[r][c].status === 'ok' && !ev.cells[r][c].empty && !(solver[r + ',' + c] && solver[r + ',' + c].diverged)) okKeys[r + ',' + c] = true;
       j.hoursLeft -= plan.cost;
       const g = ev.best;
-      const notes = notesFor(j.brief, g, j.dailiesUsed, rng);
+      const notes = notesFor(j.brief, g, j.dailiesUsed, rng, { caps: deckCapabilities(this.cards, this.hw, this.relicSet()) });
       j.dailiesUsed += 1;
       if (notes.choice) j.pendingNote = notes.choice;
       j.last = { sigs: ev.sigs, okKeys, solver, fails, grade: g, stream: g && ev.rowOut[g.row], ev, fresh, oomRow, notes, cost: plan.cost, cachedCount: Object.values(ev0.cached).filter(Boolean).length };
@@ -1503,7 +1571,7 @@
       if (ch.kind === 'pincher') {
         if (opt.key === 'hours') {
           const before = j.hoursLeft;
-          j.hoursLeft = Math.max(0, Math.round(j.hoursLeft * 0.8));
+          j.hoursLeft = Math.max(0, Math.round(j.hoursLeft * 0.9));
           j.brief.hoursCut = before - j.hoursLeft;
         } else {
           j.brief.payMulNote = 0.8;
@@ -1549,7 +1617,7 @@
       let pay = 0;
       if (b.kind === 'gig') {
         const noteMul = (b.payBoost || 1) * (b.payMulNote || 1);
-        pay = g.pass ? Math.round(b.pay * CONFIG.gradeMult[g.grade] * (b.client && CLIENTS[b.client].persona === 'flipper' && b.twisted ? 1.3 : 1) * noteMul / 10) * 10 : Math.round(b.pay * CONFIG.killFee / 10) * 10;
+        pay = g.pass ? Math.round(b.pay * CONFIG.gradeMult[g.grade] * (b.client && CLIENTS[b.client].persona === 'flipper' && b.twisted && !b.flipDeclined ? 1.3 : 1) * noteMul / 10) * 10 : Math.round(b.pay * CONFIG.killFee / 10) * 10;
       }
       const s = j.last.stream;
       const el = (s && !s.dead) ? (dominantElement(s, this.relicSet()) || b.hero) : b.hero;
@@ -1619,7 +1687,11 @@
         sold: false,
         unlocks: (NODE_UNLOCKS[id] || []).filter(rid => !caps.reqs[rid])
       }));
-      const relicPool = shuffle(rng, SHOP_RELICS.filter(r => !this.relics.includes(r)));
+      // Only your own element's nerd relic is worth buying; offering the other
+      // elements' specialists would just be dead shop slots.
+      const ownEl = BACKGROUNDS[this.bg] ? BACKGROUNDS[this.bg].el : null;
+      const relicPool = shuffle(rng, SHOP_RELICS.filter(r =>
+        !this.relics.includes(r) && (!r.startsWith('nerd_') || (ownEl && r === 'nerd_' + ownEl))));
       let relicIds = relicPool.slice(0, CONFIG.shop.relicCount);
       // The HDA (the strongest relic) is guaranteed to show up at least once
       // in a shop after week 3, so it can't be a pure lottery.
@@ -1714,7 +1786,7 @@
     emptyGrid, makeCard, cardParts, cardDept, cardHours, cardRam, cardRisk, isSolverCard, cardHasQuality,
     newStream, evaluate, streamStars, streamCap, dominantElement, gradeShot, notesFor, reqLoc,
     genGig, genTest, genPortfolio, checkGate, reelGate,
-    deckTypes, deckChainStep, deckCapabilities, deckRowFit, deckStarsFor, deckPolishFor, deckMinHours, makeGigFeasible, flipTargetFor, REQ_ENABLERS, NODE_UNLOCKS,
+    deckTypes, deckChainStep, deckCapabilities, deckRowFit, deckStarsFor, deckPolishFor, deckMinHours, makeGigFeasible, flipTargetFor, flipFeasible, REQ_ENABLERS, NODE_UNLOCKS,
     simParams, simInit, simStep, simBonus, simPredict, simBand, simSpikeChance, snapshotLook,
     Game
   };
