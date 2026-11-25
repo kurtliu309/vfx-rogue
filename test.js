@@ -1,6 +1,7 @@
 'use strict';
 const assert = require('assert');
 const V = require('./engine.js');
+const S = require('./story.js');
 
 let passed = 0;
 function test(name, fn) {
@@ -278,6 +279,150 @@ test('full headless run of 12 weeks with a scripted player never throws', () => 
       assert.ok(['evicted', 'freelance', 'dream', 'offer_kiln', 'offer_northlight'].includes(g.ending.id));
     }
   }
+});
+
+test('board: the gig for your best element is always deck-satisfiable', () => {
+  for (const bg of Object.keys(V.BACKGROUNDS)) {
+    for (let seed = 1; seed <= 4; seed++) {
+      const g = new V.Game(seed * 977).start(bg);
+      for (let w = 1; w <= 12; w++) {
+        g.inbox.forEach((m, i) => {
+          if (m.choices && m.resolved == null && !g.resolveEvent(i, 0).ok) g.resolveEvent(i, m.choices.length - 1);
+        });
+        assert.ok(g.toBoard(), 'toBoard ' + bg + ' seed ' + seed + ' week ' + w);
+        const fav = g.favoriteElement();
+        if (w > 1 && fav) {
+          const gig = g.board.gigs.find(x => x.hero === fav);
+          assert.ok(gig, 'favorite gig missing (' + bg + ' seed ' + seed + ' week ' + w + ')');
+          const caps = V.deckCapabilities(g.cards, g.hw, g.relicSet());
+          const allReqs = gig.reqs.concat(gig.hidden ? [gig.hidden] : []);
+          const heroPolish = V.deckPolishFor(caps, fav, allReqs);
+          for (const q of allReqs) {
+            if (q.id === 'polish') assert.ok(q.n <= heroPolish, 'polish ' + q.n + ' > ' + heroPolish + ' (' + bg + ' w' + w + ')');
+            else assert.ok(caps.reqs[q.id], 'unsatisfiable ' + q.id + ' (' + bg + ' seed ' + seed + ' week ' + w + ')');
+          }
+          const reachable = V.deckStarsFor(caps, fav, allReqs);
+          assert.ok(gig.minStars <= reachable, 'star bar ' + gig.minStars + ' > ' + reachable + ' (' + bg + ' w' + w + ')');
+          const budget = V.CONFIG.baseHours + (gig.hoursMod || 0);
+          const step = Math.max(1, Math.floor(gig.minStars));
+          assert.ok(V.deckMinHours(caps, fav, allReqs, step) <= budget, 'hours ' + V.deckMinHours(caps, fav, allReqs, step) + ' > ' + budget + ' (' + bg + ' w' + w + ')');
+        }
+        g.cash = 5000; g.job = null; g.lastDelivery = {};
+        g.toWeekend();
+        if (g.phase === 'weekend') g.nextWeek(); else break;
+      }
+    }
+  }
+});
+
+test('shop: course count from config, one missing requirement enabler always on offer', () => {
+  const enablers = ['moon', 'lens', 'toon', 'plateint', 'terrain'];
+  assert.strictEqual(V.CONFIG.shop.courseCount, 4);
+  for (const bg of Object.keys(V.BACKGROUNDS)) {
+    for (let seed = 1; seed <= 20; seed++) {
+      const g = new V.Game(seed).start(bg);
+      for (let w = 1; w <= 11; w++) {
+        g.week = w;
+        const sh = g.makeShop();
+        assert.strictEqual(sh.courses.length, V.CONFIG.shop.courseCount);
+        assert.strictEqual(new Set(sh.courses.map(c => c.type)).size, sh.courses.length, 'duplicate course');
+        const owned = new Set(g.cards.map(c => c.type));
+        const missing = enablers.filter(id => !owned.has(id));
+        if (!missing.length) continue;
+        const offered = sh.courses.filter(c => missing.includes(c.type));
+        assert.ok(offered.length >= 1, 'no missing enabler in shop (' + bg + ' seed ' + seed + ' w' + w + ')');
+        assert.ok(offered.some(c => c.unlocks && c.unlocks.length), 'missing enabler has no unlock label');
+      }
+    }
+  }
+});
+
+test('Dust Pass adds smoke to any stream without adding hero stars', () => {
+  assert.ok(V.NODE_DEFS.dustpass);
+  const g = grid(1, 4);
+  put(g, 0, 0, 'box'); put(g, 0, 1, 'dustpass'); put(g, 0, 2, 'light'); put(g, 0, 3, 'comp');
+  const ev = V.evaluate(g, {});
+  const s = ev.rowOut[0];
+  assert.ok(s.smoke);
+  assert.strictEqual(V.streamStars(s, [], 'fire'), 0);
+  const b = brief('fire', 0, ['lit', 'final', 'smoke']);
+  assert.ok(V.evaluate(g, { brief: b }).best.pass);
+});
+
+test('Halcyon: reachable numbers and auteur tests do not move the polish bar', () => {
+  const st = V.STUDIOS.halcyon;
+  assert.strictEqual(st.minStars, 3.5);
+  assert.strictEqual(st.hoursMod, 2);
+  assert.strictEqual(st.reqs.find(q => q.id === 'polish').n, 2);
+  const b = { kind: 'test', studio: 'halcyon', hero: 'fire', minStars: 3.5, reqs: JSON.parse(JSON.stringify(st.reqs)), revealed: [] };
+  V.notesFor(b, { pass: true, missing: [], grade: 'S' }, 0, V.mulberry32(1));
+  assert.strictEqual(b.reqs.find(q => q.id === 'polish').n, 2, 'auteur must not raise polish on tests');
+  // a gig auteur still raises it once
+  const b2 = { kind: 'gig', client: 'juno', hero: 'fire', minStars: 2, reqs: [{ id: 'polish', n: 2 }], revealed: [] };
+  V.notesFor(b2, { pass: true, missing: [], grade: 'B' }, 0, V.mulberry32(1));
+  assert.strictEqual(b2.reqs.find(q => q.id === 'polish').n, 3);
+});
+
+test('gate: the current test shot counts towards the reel gate; distinct still needs 2 elements', () => {
+  const gate = V.reelGate('halcyon');
+  const reel = [{ stars: 3.5, el: 'fire' }, { stars: 4, el: 'fire' }, { stars: 3, el: 'fire' }];
+  assert.strictEqual(V.checkGate(gate, reel).ok, false, 'one element only');
+  assert.strictEqual(V.checkGate(gate, reel, { testShot: { stars: 3.5, heroChoices: true } }).ok, true);
+  const reelOne = [{ stars: 4, el: 'fire' }];
+  assert.strictEqual(V.checkGate(gate, reelOne, { testShot: { stars: 3.5, heroChoices: true } }).ok, false, 'count still short');
+});
+
+test('week 12 charges rent and can evict', () => {
+  const poor = new V.Game(1).start('pyro');
+  poor.week = 12; poor.phase = 'delivered'; poor.lastDelivery = {}; poor.cash = 0;
+  poor.toWeekend();
+  assert.strictEqual(poor.phase, 'ending');
+  assert.strictEqual(poor.ending.id, 'evicted');
+  const rich = new V.Game(1).start('pyro');
+  rich.week = 12; rich.phase = 'delivered'; rich.lastDelivery = {}; rich.cash = 5000;
+  const rent = rich.rentDue();
+  rich.toWeekend();
+  assert.strictEqual(rich.ending.id, 'freelance');
+  assert.strictEqual(rich.cash, 5000 - rent);
+});
+
+test('re-cook: unchanged stable solvers are cached; diverged solvers pay hours again', () => {
+  const g = newJobGame('pyro');
+  g.chooseJob('gig', 0);
+  g.place(uidOf(g, 'box'), 0, 0); g.place(uidOf(g, 'pyrosrc'), 0, 1);
+  g.place(uidOf(g, 'pyro'), 0, 2); g.place(uidOf(g, 'light'), 0, 3);
+  const first = g.commitCook({ '0,2': { detail: 65, diverged: false, f: 35 } });
+  assert.strictEqual(first.cost, 5);
+  assert.strictEqual(g.preview().cost, 0, 'unchanged network is fully cached');
+  assert.strictEqual(g.prepareCook().sims.length, 0, 'stable solver must not re-roll');
+  const second = g.commitCook({});
+  assert.strictEqual(second.cost, 0);
+  assert.strictEqual(g.job.last.solver['0,2'].detail, 65, 'cached solver result is unchanged');
+
+  const g2 = newJobGame('pyro');
+  g2.chooseJob('gig', 0);
+  g2.place(uidOf(g2, 'box'), 0, 0); g2.place(uidOf(g2, 'pyrosrc'), 0, 1);
+  g2.place(uidOf(g2, 'pyro'), 0, 2); g2.place(uidOf(g2, 'light'), 0, 3);
+  g2.commitCook({ '0,2': { detail: 20, diverged: true, f: 12 } });
+  const hoursBefore = g2.job.hoursLeft;
+  assert.ok(g2.preview().cost > 0, 'diverged solver must cost hours again');
+  assert.strictEqual(g2.prepareCook().sims.length, 1, 'diverged solver re-sims');
+  const rerun = g2.commitCook({});
+  assert.ok(rerun.cost >= V.cardHours(g2.cards.find(c => c.type === 'pyro')), 're-cook charges solver hours');
+  assert.strictEqual(g2.job.hoursLeft, hoursBefore - rerun.cost);
+});
+
+test('disk failure event hurts hours and a quality tier, never deletes cards', () => {
+  const g = new V.Game(5).start('pyro');
+  const basics = ['box', 'light', 'comp', 'merge', 'plate', 'shader'];
+  g.cards.forEach(c => { if (!basics.includes(c.type)) c.q = 2; });
+  const before = g.cards.length;
+  const ev = S.EVENTS.find(e => e.id === 'drive');
+  const msg = ev.make(g);
+  msg.choices[0].effect(g);
+  assert.strictEqual(g.cards.length, before, 'no card may be deleted');
+  assert.strictEqual(g.flags.hoursPenalty, -4);
+  assert.ok(g.cards.some(c => !basics.includes(c.type) && (c.q || 1) === 1), 'one non-basic card dropped to Q1');
 });
 
 test('i18n: en/zh UI tables have identical, non-empty keys', () => {

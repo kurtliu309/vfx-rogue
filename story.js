@@ -67,8 +67,8 @@
       shotName: loc('Northlight Test', 'Northlight 测试'),
       offer: loc('Ravi: “Mid-level FX on a fantasy series. Two seasons guaranteed. We\'d be lucky to have you.”', 'Ravi：“奇幻剧集的中级特效，保底两季。能请到你是我们的运气。”') },
     halcyon: { rep: 'oona', persona: 'auteur', name: loc('Halcyon Pictures', 'Halcyon Pictures'), kind: loc('Feature film · the dream', '院线电影·梦想公司'),
-      gate: { count: 3, stars: 3, distinct: 2, top: 4 }, minStars: 4, heroChoice: true, hoursMod: 5,
-      reqs: [{ id: 'lit' }, { id: 'tex' }, { id: 'final' }, { id: 'plate' }, { id: 'grain' }, { id: 'polish', n: 3 }],
+      gate: { count: 3, stars: 3, distinct: 2, top: 4 }, minStars: 3.5, heroChoice: true, hoursMod: 2,
+      reqs: [{ id: 'lit' }, { id: 'tex' }, { id: 'final' }, { id: 'plate' }, { id: 'grain' }, { id: 'polish', n: 2 }],
       shotName: loc('The Halcyon Test', 'Halcyon 终极测试'),
       offer: loc('', '') }
   };
@@ -83,6 +83,7 @@
     secret: [loc('Legal just called. It also needs: {req}. Sorry, should\'ve said.', '法务刚来电话，还要：{req}。抱歉，早该说的。'), loc('Oh, and the CEO wants {req}. Did I not mention that?', '对了，CEO 要{req}。我没提过吗？')],
     flip: [loc('Brand team pivot! It\'s a {el} spot now. Same deadline, obviously.', '品牌组改方向了！现在是{el}广告。截止日期当然不变。'), loc('We tested it with focus groups. They want {el}. Only {el}.', '焦点小组测过了，他们要{el}。只要{el}。')],
     auteur: [loc('Technically fine. Emotionally? Polish it. More.', '技术上没问题。情绪上？再打磨。更多。'), loc('I can see the pixels thinking. Polish harder.', '我能看见像素在思考。再磨。')],
+    auteurTest: [loc('Technically fine. I could ask for more polish. I am choosing not to. Today.', '技术上没问题。我本可以要求更多打磨。今天我选择不。'), loc('No new requirements on the test. Just make it feel expensive.', '测试不新增要求。只要让它看起来贵。')],
     love: [loc('...I just got chills. Don\'t touch anything.', '……我起鸡皮疙瘩了。什么都别动。'), loc('THIS. This is the one. Send it.', '就是这个。就这个。发过来。')],
     ok: [loc('Works for me. Deliver when you\'re happy.', '我这边可以。你满意了就交。'), loc('Solid. Any extra polish is a bonus.', '扎实。再打磨就是加分。'), loc('Approved. Unless you want to make it sing?', '通过。除非你想让它更出彩？')]
   };
@@ -201,11 +202,15 @@
     { id: 'drive', w: 1, make: g => msg('ev_drive', 'system', loc('Disk failure', '硬盘故障'), loc('Your project drive is clicking. That\'s never good.', '项目硬盘在咔咔响。这从来不是好事。'),
       [{ label: loc('Pray', '祈祷'), effect: gg => {
         if (gg.relics.includes('backup')) return { text: loc('Backup Drive saved everything. Smug.', '备份硬盘救了一切。得意。') };
-        const pool = gg.cards.filter(c => !['box', 'light', 'comp', 'merge', 'plate', 'shader'].includes(c.type));
-        if (!pool.length) return { text: loc('Nothing important was lost.', '没丢什么重要的。') };
+        gg.flags.hoursPenalty = (gg.flags.hoursPenalty || 0) - 4;
+        const basic = ['box', 'light', 'comp', 'merge', 'plate', 'shader'];
+        const pool = gg.cards.filter(c => !basic.includes(c.type) && E().cardHasQuality(c));
+        if (!pool.length) return { text: loc('You spend 4 hours relinking old files. Nothing important was lost.', '你花了 4 小时重新链接旧文件。没丢什么重要的。') };
         const c = pool[Math.floor(gg.rng() * pool.length)];
-        gg.cards = gg.cards.filter(x => x !== c);
-        return { text: { en: 'Lost a node setup: ' + E().L(E().NODE_DEFS[c.type].name, 'en') + '.', zh: '丢了一个节点预设：' + E().L(E().NODE_DEFS[c.type].name, 'zh') + '。' } };
+        const before = c.q || 1;
+        c.q = Math.max(1, before - 1);
+        const name = E().NODE_DEFS[c.type].name;
+        return { text: { en: 'You spend 4h this week relinking files. ' + name.en + ' drops a quality tier (Q' + before + ' → Q' + c.q + ').', zh: '本周花 4 小时重新链接文件。' + name.zh + ' 的质量档降 1（Q' + before + ' → Q' + c.q + '）。' } };
       } }]) },
     { id: 'plugin', w: 1, make: g => msg('ev_plugin', 'system', loc('A gift from the forum', '论坛送的礼物'), loc('Someone you helped two years ago sent you a licence key.', '两年前你帮过的一个人寄来一个授权码。'),
       [{ label: loc('Redeem', '兑换'), effect: gg => {

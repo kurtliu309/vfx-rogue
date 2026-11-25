@@ -87,7 +87,7 @@
       thresholds: [30, 60, 90, 120], qDetail: [1, 1, 1.22, 1.45], qInst: [1, 1, 1.25, 1.55]
     },
     shop: {
-      courseMin: 90, courseMax: 210, courseCount: 3,
+      courseMin: 90, courseMax: 210, courseCount: 4,
       practice: 110, cpu: [380, 520, 700], gpu: [480, 720], ram: 240,
       coffee: 45, relicCount: 2, relicMin: 220, relicMax: 360, hda: 160
     },
@@ -127,7 +127,7 @@
     env:      { name: loc('Environment', '有环境'), hint: loc('Start a row with Terrain and merge it in.', '用 Terrain 起一行再 Merge 进来。'), test: s => !!s.env },
     stylized: { name: loc('Stylized look', '风格化'), hint: loc('Toon Shader gives the stylized look.', 'Toon Shader 给风格化外观。'), test: s => !!s.stylized },
     grain:    { name: loc('Matched grain', '匹配颗粒'), hint: loc('Lens & Grain in comp.', '合成里加 Lens & Grain。'), test: s => !!s.grain },
-    smoke:    { name: loc('Smoke / dust', '烟尘'), hint: loc('Dust (after Debris) or Pyro Turbulence adds smoke.', 'Dust（接在 Debris 后）或 Turbulence 会产生烟。'), test: s => !!s.smoke },
+    smoke:    { name: loc('Smoke / dust', '烟尘'), hint: loc('Dust Pass adds smoke to any stream; Dust (after Debris) or Pyro Turbulence also work.', '烟尘层可以给任何数据流加烟；Dust（接在 Debris 后）或 Turbulence 也行。'), test: s => !!s.smoke },
     polish:   { name: loc('Polish ≥ {n}', '打磨 ≥ {n}'), hint: loc('Grade, Three-Point, look-dev matches and quality tiers add polish.', 'Grade、三点光、材质对口和质量档都加打磨。'), test: (s, n) => (s.polish || 0) >= n }
   };
 
@@ -290,6 +290,9 @@
     name: loc('Debris', '碎屑'), desc: loc('Destruction ★3.', '破碎 ★3。') }, heroStep('destr', 3)));
   def('dust', Object.assign({ dept: 'fx', h: 2, ram: 8, q: true,
     name: loc('Dust', '烟尘'), desc: loc('Destruction ★4. Adds smoke.', '破碎 ★4。会产生烟。') }, heroStep('destr', 4, { apply: s => { s.smoke = true; } })));
+  def('dustpass', { dept: 'fx', h: 1, ram: 2,
+    name: loc('Dust Pass', '烟尘层'), desc: loc('Adds smoke/dust to any geo or sim stream. No hero star. Satisfies “Smoke / dust”.', '给任意模型或解算流加上烟尘，不加主角星。满足“烟尘”。'),
+    apply(s) { s.smoke = true; } });
   // --- FX: magic ---
   def('popsrc', Object.assign({ dept: 'fx', h: 1, ram: 2, q: true,
     name: loc('Particles', '粒子'), desc: loc('Magic ★1. Works on geo or a Plate.', '魔法 ★1。模型或实拍上都能发射。') },
@@ -641,11 +644,17 @@
         lines.push(fmtLine(pick(rng, NL.flip), { el: ELEMENTS[nh].name }));
         changes.hero = nh;
       } else if (persona === 'auteur') {
-        const pr = brief.reqs.find(q => q.id === 'polish');
-        if (pr) { pr.n += 1; } else brief.reqs.push({ id: 'polish', n: 3 });
-        brief.twisted = true;
-        lines.push(pick(rng, NL.auteur));
-        changes.polish = true;
+        if (brief.kind === 'test' || brief.noPolishTwist) {
+          // Studio tests get the auteur's eye, not a moving target (P0-2).
+          brief.twisted = true;
+          lines.push(pick(rng, NL.auteurTest));
+        } else {
+          const pr = brief.reqs.find(q => q.id === 'polish');
+          if (pr) { pr.n += 1; } else brief.reqs.push({ id: 'polish', n: 3 });
+          brief.twisted = true;
+          lines.push(pick(rng, NL.auteur));
+          changes.polish = true;
+        }
       }
     }
     if (g.pass && !lines.length) {
@@ -671,6 +680,253 @@
    * 8. job / board generation
    * ================================================================ */
   const REQ_POOL = ['tex', 'lit', 'final', 'night', 'grain', 'smoke', 'env', 'plate', 'stylized'];
+
+  /* Which requirements can a deck actually satisfy?
+   * Used to keep the “gig that matches your best element” doable (P0-1) and to
+   * label shop courses that unlock a missing requirement. Deliberately a bit
+   * conservative: it assumes budget-free layout but respects the column count. */
+  const CHAIN_STEPS = {
+    fire: ['pyrosrc', 'pyro', 'turb', 'upres'],
+    water: ['flipsrc', 'flip', 'white', 'mesher'],
+    destr: ['fracture', 'rbd', 'debris', 'dust'],
+    magic: ['popsrc', 'pop', 'trails', 'glow'],
+    creature: ['rig', 'animate|mocap', 'muscle|vellum', 'groom']
+  };
+  const REQ_ENABLERS = ['moon', 'lens', 'toon', 'plateint', 'terrain'];
+  const NODE_UNLOCKS = { moon: ['night'], lens: ['grain'], toon: ['stylized'], plateint: ['plate'], terrain: ['env'], dustpass: ['smoke'] };
+
+  function deckTypes(cards) {
+    const t = new Set();
+    for (const c of cards || []) for (const p of cardParts(c)) t.add(p);
+    return t;
+  }
+  const hasAnyType = (types, ids) => ids.some(id => types.has(id));
+  function deckChainStep(types, el) {
+    const steps = CHAIN_STEPS[el];
+    if (!steps) return 0;
+    if (el === 'creature' && !types.has('sculpt')) return 0; // Rig needs organic geo
+    let n = 0;
+    for (const s of steps) {
+      if (s.split('|').some(a => types.has(a))) n += 1;
+      else break;
+    }
+    return n;
+  }
+  function deckCapabilities(cards, hw, relics) {
+    const types = deckTypes(cards);
+    const rel = relics instanceof Set ? relics : new Set(relics || []);
+    const cols = (hw && hw.cols) || CONFIG.startCols;
+    const hasGeo = hasAnyType(types, ['box', 'sculpt', 'hardsurf', 'terrain', 'scan']);
+    const canLit = hasAnyType(types, ['light', 'threept', 'hdri', 'moon', 'firelight', 'pathtrace']);
+    const canFinal = hasAnyType(types, ['comp', 'plateint', 'grade', 'lens', 'haze', 'glow']);
+    const canTex = hasAnyType(types, ['shader', 'paint', 'skin', 'metal', 'toon', 'scan']);
+    const canMerge = types.has('merge');
+    const plateRow = types.has('plate') && types.has('plateint') && canMerge;
+    const fireSmoke = types.has('turb') && types.has('pyrosrc') && types.has('pyro');
+    const destrSmoke = types.has('dust') && types.has('fracture') && types.has('rbd') && types.has('debris');
+    const reqs = {
+      tex: canTex && hasGeo,
+      lit: canLit && hasGeo,
+      final: canLit && canFinal,
+      plate: plateRow,
+      night: types.has('moon'),
+      env: types.has('terrain'),
+      stylized: types.has('toon'),
+      grain: types.has('lens'),
+      smoke: fireSmoke || destrSmoke || (types.has('dustpass') && hasGeo)
+    };
+    const chain = {};
+    for (const el of ELEMENT_IDS) chain[el] = deckChainStep(types, el);
+    const rows = (hw && hw.rows) || CONFIG.startRows;
+    const caps = { types, reqs, chain, polish: 0, maxStars: {}, cols, rows, canLit, canFinal, relics: rel };
+    for (const el of ELEMENT_IDS) caps.maxStars[el] = deckStarsFor(caps, el, []);
+    caps.polish = Math.max.apply(null, ELEMENT_IDS.map(el => deckPolishFor(caps, el, [])));
+    reqs.polish = caps.polish; // numeric: how much polish the deck can put on one row
+    return caps;
+  }
+  /* approximate polish the deck can put on one finished hero row (conservative) */
+  function deckPolishFor(caps, el, reqs) {
+    if (!caps.canLit || !caps.canFinal) return 0;
+    const types = caps.types;
+    const ids = (reqs || []).map(q => q.id);
+    const scanSource = types.has('scan') && el !== 'creature' && !ids.includes('env') && !ids.includes('stylized');
+    let p = scanSource ? 1 : 0; // Scan comes pre-textured, +1 polish
+    if (!scanSource) {
+      // a surfacing slot exists; take the best match polish
+      let bestSurf = 0;
+      if (types.has('toon')) bestSurf = 1;
+      if (types.has('paint') && (types.has('terrain') || types.has('sculpt'))) bestSurf = Math.max(bestSurf, 1);
+      if (types.has('skin') && types.has('sculpt')) bestSurf = Math.max(bestSurf, 1);
+      if (types.has('metal') && (types.has('hardsurf') || types.has('scan'))) bestSurf = Math.max(bestSurf, 1);
+      p += bestSurf;
+    }
+    let bestLight = 0;
+    if (types.has('pathtrace')) bestLight = 2;
+    if (types.has('hdri') && types.has('terrain')) bestLight = Math.max(bestLight, 2);
+    if (types.has('threept') || types.has('firelight')) bestLight = Math.max(bestLight, 1);
+    if (ids.includes('night')) bestLight = 0; // Moonlight occupies the light slot
+    p += bestLight;
+    let bestComp = 0;
+    if (types.has('grade')) bestComp = 1;
+    if (types.has('lens')) bestComp = 1;
+    if (ids.includes('grain')) bestComp = Math.min(bestComp, 1); // Lens is the comp node
+    if (ids.includes('plate') && !ids.includes('grain')) bestComp = 0; // Plate Integrate occupies it
+    p += bestComp;
+    return p;
+  }
+  /* base columns for source + texture + light + comp */
+  function deckBaseCols(caps, el, reqs) {
+    // Scan is both a source and textured; only a non-creature chain can use it.
+    const scanSource = caps.types.has('scan') && el !== 'creature';
+    let base = scanSource ? 3 : 4;
+    // An Environment or Stylized requirement still needs a separate source/surfacing
+    // card, so Scan's column saving is gone.
+    if (scanSource && reqs.some(q => q.id === 'env' || q.id === 'stylized')) base = 4;
+    return base;
+  }
+  /* how deep the hero chain has to be for smoke, if there is no Dust Pass */
+  function smokeMinStep(caps, el) {
+    if (caps.types.has('dustpass')) return 0; // standalone node, no chain depth needed
+    if (el === 'fire' && caps.chain.fire >= 3) return 3; // Turbulence
+    if (el === 'destr' && caps.chain.destr >= 4) return 4; // Dust
+    return Infinity;
+  }
+  /* columns left for hero-chain steps once base pipeline + extra requirements are placed */
+  function deckRowFit(caps, el, reqs) {
+    let extra = 0;
+    const ids = reqs.map(q => q.id);
+    const hasPlate = ids.includes('plate');
+    for (const id of ids) {
+      if (id === 'plate') extra += 1; // Merge (Plate Integrate replaces Comp)
+      else if (id === 'smoke') {
+        const ms = smokeMinStep(caps, el);
+        if (ms === 0) extra += 1; // Dust Pass column
+        else if (!isFinite(ms)) extra += 99; // no way to make smoke with this hero
+      }
+      else if (id === 'env' && el === 'creature') extra += 1; // Terrain can't be the organic source
+    }
+    if (hasPlate && ids.includes('grain')) extra += 1; // need both Plate Integrate and Lens
+    return Math.max(0, caps.cols - deckBaseCols(caps, el, reqs) - extra);
+  }
+  /* rough minimum hours for a layout reaching the given chain depth */
+  function deckMinHours(caps, el, reqs, step) {
+    const types = caps.types;
+    const ids = reqs.map(q => q.id);
+    const creature = el === 'creature';
+    const needEnv = ids.includes('env'), needPlate = ids.includes('plate'),
+      needGrain = ids.includes('grain'), needNight = ids.includes('night'), needSmoke = ids.includes('smoke');
+    let h = 0;
+    const needStyl = ids.includes('stylized');
+    if (creature) h += 2 + 1; // Sculpt + shader
+    else if (needEnv) h += 2 + 1; // Terrain + shader
+    else if (types.has('scan') && !needStyl) h += 3; // Scan is source and texture in one card
+    else h += 1 + 1; // Box + shader
+    if (creature && needEnv) h += 2 + 1; // Terrain row + Merge
+    for (let s = 1; s <= step; s++) {
+      const cands = NODE_IDS.filter(id => {
+        const hd = NODE_DEFS[id].hero;
+        return hd && hd.el === el && hd.step === s && types.has(id);
+      });
+      if (!cands.length) return Infinity;
+      h += Math.min.apply(null, cands.map(id => NODE_DEFS[id].h));
+    }
+    h += 1; // any light
+    if (needPlate) { h += 2 + 1; if (needGrain) h += 1; } // Plate Integrate + Merge (+ Lens)
+    else h += 1; // comp (or Lens)
+    const polishReq = reqs.find(q => q.id === 'polish');
+    if (polishReq) {
+      // budget for turning the light/comp slots into polish nodes (Path Tracer is pricey)
+      if (polishReq.n >= 3) h += 4;
+      else if (polishReq.n >= 2) h += 1;
+    }
+    if (needSmoke && types.has('dustpass')) h += 1;
+    return h;
+  }
+  /* guaranteed hero stars for a given list of requirements: chain depth that fits,
+   * capped by the pipeline. Sim luck and relics can only push this higher. */
+  function deckStarsFor(caps, el, reqs) {
+    let step = Math.min(caps.chain[el] || 0, deckRowFit(caps, el, reqs));
+    if (reqs.some(q => q.id === 'smoke')) {
+      const ms = smokeMinStep(caps, el);
+      if (!isFinite(ms) || step < ms) step = 0;
+    }
+    let cap = CONFIG.maxStars;
+    if (!caps.canLit) cap = CONFIG.capUnlit;
+    else if (!caps.canFinal) cap = CONFIG.capNoComp;
+    return round1(Math.max(0, Math.min(step, cap)));
+  }
+
+  /* Rewrite the “matches your best element” gig so every extra requirement can
+   * be met by the current deck and the star bar can actually be reached. */
+  function makeGigFeasible(gig, week, caps, rng) {
+    const mandatory = [];
+    if (caps.reqs.lit) mandatory.push('lit');
+    if (week >= 2 && caps.reqs.tex) mandatory.push('tex');
+    if (week >= 3 && caps.reqs.final) mandatory.push('final');
+    const isPolish = q => q.id === 'polish';
+    const isMandatory = q => mandatory.includes(q.id);
+    const extras = gig.reqs.filter(q => !isMandatory(q) && !isPolish(q));
+    const kept = extras.filter(q => caps.reqs[q.id]);
+    const fill = shuffle(rng, REQ_POOL.filter(id => caps.reqs[id] && !mandatory.includes(id) && (!gig.hidden || id !== gig.hidden.id) && !kept.some(q => q.id === id)));
+    while (kept.length < extras.length && fill.length) kept.push({ id: fill.shift() });
+    // If the grid is too narrow or short for the extra columns/rows plus a hero
+    // step, drop the hungry extras rather than promise something undoable.
+    const costly = q => q.id === 'plate' || q.id === 'smoke';
+    const probe = () => kept.concat(gig.hidden ? [gig.hidden] : []);
+    const supportRows = list => {
+      let r = 0;
+      if (list.some(q => q.id === 'plate')) r += 1;
+      if (gig.hero === 'creature' && list.some(q => q.id === 'env')) r += 1;
+      return r;
+    };
+    const budget = CONFIG.baseHours + (gig.hoursMod || 0);
+    const infeasible = () => deckStarsFor(caps, gig.hero, probe()) < 1 ||
+      supportRows(probe()) > caps.rows - 1 ||
+      deckMinHours(caps, gig.hero, probe(), 1) > budget;
+    while (kept.length && infeasible()) {
+      let idx = kept.findIndex(q => q.id === 'plate');
+      if (idx < 0) idx = kept.findIndex(q => q.id === 'env' && gig.hero === 'creature');
+      if (idx < 0) idx = kept.findIndex(costly);
+      if (idx < 0) break;
+      kept.splice(idx, 1);
+    }
+    let out = mandatory.map(id => ({ id })).concat(kept.map(q => ({ id: q.id })));
+    if (gig.hidden) {
+      // Hidden requirements still have to be satisfiable — and fit in the grid.
+      const hiddenProbe = out.concat([gig.hidden]);
+      const bad = !caps.reqs[gig.hidden.id] ||
+        deckStarsFor(caps, gig.hero, hiddenProbe) < 1 ||
+        supportRows(hiddenProbe) > caps.rows - 1 ||
+        deckMinHours(caps, gig.hero, hiddenProbe, 1) > budget;
+      if (bad) {
+        const pool = REQ_POOL.filter(id => caps.reqs[id] && !out.some(q => q.id === id) && id !== 'plate' && id !== 'smoke' && !(gig.hero === 'creature' && id === 'env'));
+        gig.hidden = pool.length ? { id: pick(rng, pool) } : null;
+      }
+    }
+    const pr = gig.reqs.find(isPolish);
+    if (pr) {
+      const isAuteur = !!(gig.client && CLIENTS[gig.client] && CLIENTS[gig.client].persona === 'auteur');
+      const heroPolish = deckPolishFor(caps, gig.hero, out.concat(gig.hidden ? [gig.hidden] : []));
+      // An auteur note adds +1 polish after the first dailies; leave room for it.
+      const cap = Math.max(0, heroPolish - (isAuteur ? 1 : 0));
+      const n = Math.min(pr.n, cap);
+      if (n > 0) out.push({ id: 'polish', n });
+      else if (isAuteur) gig.noPolishTwist = true;
+    }
+    gig.reqs = out;
+    const allReqs = out.concat(gig.hidden ? [gig.hidden] : []);
+    let reachable = deckStarsFor(caps, gig.hero, allReqs);
+    while (reachable >= 1 && deckMinHours(caps, gig.hero, allReqs, reachable) > budget) reachable -= 1;
+    if (gig.minStars > reachable) gig.minStars = Math.max(1, round1(reachable));
+    if (gig.flipTo) {
+      const flipStars = Math.max(1, gig.minStars - 0.5);
+      const alt = ELEMENT_IDS.filter(e => e !== gig.hero &&
+        deckStarsFor(caps, e, allReqs) >= flipStars &&
+        deckMinHours(caps, e, allReqs, Math.max(1, Math.floor(flipStars))) <= budget);
+      if (alt.length && !alt.includes(gig.flipTo)) gig.flipTo = pick(rng, alt);
+    }
+    return gig;
+  }
   function genGig(rng, week, clientId, bg) {
     const cl = CLIENTS[clientId];
     const hero = (cl.heroes && rng() < 0.7) ? pick(rng, cl.heroes) : pick(rng, ELEMENT_IDS);
@@ -706,24 +962,35 @@
     return { kind: 'portfolio', hero: null, heroChoices: ELEMENT_IDS.slice(), minStars: 1, reqs: [{ id: 'lit' }, { id: 'final' }], revealed: [], pay: 0, nda: false, hoursMod: 2, title: loc('Personal Shot', '个人作品') };
   }
   function reelGate(studioId) { return STUDIOS[studioId].gate; }
-  function checkGate(gate, reel) {
+  function checkGate(gate, reel, opts) {
     const eligible = reel.filter(s => !s.nda && !s.ng);
     const res = { ok: true, lines: [] };
     const good = eligible.filter(s => s.stars >= gate.stars);
-    const okCount = good.length >= gate.count;
-    res.lines.push({ ok: okCount, key: 'gate.count', vars: { n: gate.count, s: gate.stars, have: good.length } });
+    // The shot you are about to make counts towards the gate (P0-2): you still
+    // have to pass the test, but you do not need an extra portfolio week for it.
+    const ts = opts && opts.testShot;
+    const testGood = !!(ts && ts.stars >= gate.stars);
+    const countHave = good.length + (testGood ? 1 : 0);
+    const okCount = countHave >= gate.count;
+    res.lines.push({ ok: okCount, key: 'gate.count', vars: { n: gate.count, s: gate.stars, have: countHave } });
     if (!okCount) res.ok = false;
     if (gate.distinct) {
-      const d = new Set(good.map(s => s.el)).size;
+      const els = new Set(good.map(s => s.el));
+      if (testGood) {
+        if (ts.heroChoices) { if (els.size < ELEMENT_IDS.length) els.add('__test'); }
+        else if (ts.el) els.add(ts.el);
+      }
+      const d = Math.min(els.size, ELEMENT_IDS.length);
       const ok = d >= gate.distinct;
       res.lines.push({ ok, key: 'gate.distinct', vars: { n: gate.distinct, have: d } });
       if (!ok) res.ok = false;
     }
     if (gate.top) {
-      const ok = eligible.some(s => s.stars >= gate.top);
+      const ok = eligible.some(s => s.stars >= gate.top) || !!(ts && ts.stars >= gate.top);
       res.lines.push({ ok, key: 'gate.top', vars: { s: gate.top } });
       if (!ok) res.ok = false;
     }
+    res.testIncluded = !!testGood;
     return res;
   }
 
@@ -838,19 +1105,27 @@
       const gigs = [];
       const n = this.week === 1 ? 1 : 3;
       for (let i = 0; i < n; i++) gigs.push(genGig(rng, this.week, this.week === 1 ? 'rumble' : pool[i % pool.length], this.bg));
-      // one gig always speaks to what you're good at
+      // one gig always speaks to what you're good at — and it must be doable
       const fav = this.favoriteElement();
-      if (n > 1 && fav && !gigs.some(gg => gg.hero === fav)) {
-        const gi = Math.floor(rng() * n);
-        gigs[gi].hero = fav; gigs[gi].title = pick(rng, ELEMENTS[fav].noun);
-        if (gigs[gi].flipTo === fav) gigs[gi].flipTo = pick(rng, ELEMENT_IDS.filter(e => e !== fav));
+      if (n > 1 && fav) {
+        let gi = gigs.findIndex(gg => gg.hero === fav);
+        if (gi < 0) {
+          gi = Math.floor(rng() * n);
+          gigs[gi].hero = fav; gigs[gi].title = pick(rng, ELEMENTS[fav].noun);
+          if (gigs[gi].flipTo === fav) gigs[gi].flipTo = pick(rng, ELEMENT_IDS.filter(e => e !== fav));
+        }
+        const caps = deckCapabilities(this.cards, this.hw, this.relicSet());
+        makeGigFeasible(gigs[gi], this.week, caps, rng);
       }
       if (this.week === 1) { gigs[0].minStars = 1; gigs[0].reqs = [{ id: 'lit' }]; gigs[0].hero = BACKGROUNDS[this.bg].el || 'destr'; gigs[0].tutorial = true; gigs[0].title = ELEMENTS[gigs[0].hero].noun[0]; gigs[0].pay = 520; gigs[0].nda = false; }
       const board = { gigs, portfolio: this.week > 1 ? genPortfolio() : null, test: null };
       const tw = CONFIG.testWeeks[this.week];
       if (tw) {
         board.test = genTest(rng, tw, this.week);
-        board.testGate = checkGate(reelGate(tw), this.reel);
+        const ts = board.test;
+        board.testGate = checkGate(reelGate(tw), this.reel, {
+          testShot: { stars: ts.minStars, el: ts.heroChoices ? null : ts.hero, heroChoices: !!ts.heroChoices }
+        });
       }
       return board;
     }
@@ -1118,14 +1393,14 @@
     toWeekend() {
       const d = this.lastDelivery;
       if (d && d.win) { this.ending = { id: 'dream' }; this.phase = 'ending'; return; }
-      if (this.week >= CONFIG.weeks) { this.ending = { id: 'freelance' }; this.phase = 'ending'; return; }
       this.job = null;
-      // pay rent
+      // Sunday rent comes due even in week 12 (P2-8).
       const rent = this.rentDue();
       this.cash -= rent;
       this.stats.rentPaid += rent;
       this.lastRent = rent;
       if (this.cash < 0) { this.ending = { id: 'evicted' }; this.phase = 'ending'; return; }
+      if (this.week >= CONFIG.weeks) { this.ending = { id: 'freelance' }; this.phase = 'ending'; return; }
       this.shop = this.makeShop();
       this.phase = 'weekend';
     }
@@ -1134,10 +1409,24 @@
     makeShop() {
       const rng = mulberry32(this.seed ^ (this.week * 104729));
       const owned = new Set(this.cards.map(c => c.type));
-      const ids = shuffle(rng, NODE_IDS.filter(id => !['box', 'plate'].includes(id)));
+      const caps = deckCapabilities(this.cards, this.hw, this.relicSet());
+      // One course is always a missing requirement enabler, so enabler supply is
+      // no longer a lottery (P0-1). If you own them all, the shop is random again.
+      const missingEnablers = REQ_ENABLERS.filter(id => !owned.has(id));
+      const picked = missingEnablers.length ? [pick(rng, missingEnablers)] : [];
+      const ids = shuffle(rng, NODE_IDS.filter(id => !['box', 'plate'].includes(id) && !picked.includes(id)));
       // prefer unowned
       ids.sort((a, b) => (owned.has(a) ? 1 : 0) - (owned.has(b) ? 1 : 0));
-      const courses = ids.slice(0, CONFIG.shop.courseCount + 1).map(id => ({ type: id, price: Math.round((CONFIG.shop.courseMin + rng() * (CONFIG.shop.courseMax - CONFIG.shop.courseMin)) / 5) * 5, sold: false }));
+      for (const id of ids) {
+        if (picked.length >= CONFIG.shop.courseCount) break;
+        picked.push(id);
+      }
+      const courses = picked.slice(0, CONFIG.shop.courseCount).map(id => ({
+        type: id,
+        price: Math.round((CONFIG.shop.courseMin + rng() * (CONFIG.shop.courseMax - CONFIG.shop.courseMin)) / 5) * 5,
+        sold: false,
+        unlocks: (NODE_UNLOCKS[id] || []).filter(rid => !caps.reqs[rid])
+      }));
       const relicPool = shuffle(rng, SHOP_RELICS.filter(r => !this.relics.includes(r)));
       const relics = relicPool.slice(0, CONFIG.shop.relicCount).map(id => ({ id, price: Math.round((CONFIG.shop.relicMin + rng() * (CONFIG.shop.relicMax - CONFIG.shop.relicMin)) / 10) * 10, sold: false }));
       return { courses, relics, practiceUsed: false, coffeeUsed: false, hdaUsed: false };
@@ -1226,6 +1515,7 @@
     emptyGrid, makeCard, cardParts, cardDept, cardHours, cardRam, cardRisk, isSolverCard, cardHasQuality,
     newStream, evaluate, streamStars, streamCap, dominantElement, gradeShot, notesFor, reqLoc,
     genGig, genTest, genPortfolio, checkGate, reelGate,
+    deckTypes, deckChainStep, deckCapabilities, deckRowFit, deckStarsFor, deckPolishFor, deckMinHours, makeGigFeasible, REQ_ENABLERS, NODE_UNLOCKS,
     simParams, simInit, simStep, simBonus, simPredict, snapshotLook,
     Game
   };
